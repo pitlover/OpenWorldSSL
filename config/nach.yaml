@@ -1,0 +1,65 @@
+project: "OpenWorldSSL"
+name: ""
+save_dir: "result/${name}"
+data_dir: "../Datasets"
+img_size: 224
+gps: 8  # this configuration file is set for 8-GPUs
+
+# ---------------------------------------------------------------- #
+wandb:
+  mode: "online"
+  notes: null
+  id: null
+
+seed: 12345
+resume:
+  checkpoint: null
+  strict: true
+
+# ---------------------------------------------------------------- #
+model:
+  backbone:
+    name: "resnet50"      # "resnet18" "resnet50"
+  head:
+    name: "cls"
+    num_classes: 1000
+
+loss: # Cross-entropy
+  label_smoothing: 0.1
+
+metric: # Accuracy
+  top_k: [ 1, 5 ]
+
+# ---------------------------------------------------------------- #
+dataloader:
+  train:
+    batch_size: 512  # per-GPU  (approx. 10GB)
+    num_workers: 2  # per-process
+  valid:
+    batch_size: 250  # per-GPU
+    num_workers: 2  # per-process
+
+# ---------------------------------------------------------------- #
+optimizer:
+  name: "sgd"
+  lr: 2.560  # 0.001 * batch_size_per_gpu * num_accum * num_gpus
+  momentum: 0.9
+  weight_decay: 5.0e-4
+
+scheduler:
+  name: "cos"     # "cos" "custom" "constant"
+  warmup:
+    start_factor: 0.01
+    epochs: 10
+  decay:
+    epochs: 190  # warmup + decay should be the same as trainer.max_epochs
+    min_lr: 1.0e-6
+
+# ---------------------------------------------------------------- #
+trainer:
+  fp16: true
+  max_epochs: 200
+  print_interval_iters: 100
+  valid_interval_epochs: 10
+  clip_grad: 100.0
+  num_accum: 1
