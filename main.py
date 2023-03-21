@@ -214,11 +214,12 @@ def run(cfg: Dict, debug: bool = False) -> None:
     img_size = cfg["img_size"]  # 224
     data_dir = cfg["data_dir"]
 
-    train_transform = build_transform(img_size, is_train=True)
-    train_dataset = build_dataset(data_dir, is_train=True, transform=train_transform)
+    train_label_dataset = build_dataset(data_dir, is_train=True, is_label=True, cfg=cfg["dataset"])
+    train_unlabel_dataset = build_dataset(data_dir, is_train=True, is_label=False, cfg=cfg["dataset"],
+                                          unlabeled_idxs=train_label_dataset.unlabeled_idxs)
+    # Loader 도 바껴야함..
     train_dataloader = build_dataloader(train_dataset, is_train=True, cfg=cfg["dataloader"]["train"])
 
-    valid_transform = build_transform(img_size, is_train=False)
     valid_dataset = build_dataset(data_dir, is_train=False, transform=valid_transform)
     valid_dataloader = build_dataloader(valid_dataset, is_train=False, cfg=cfg["dataloader"]["valid"])
 

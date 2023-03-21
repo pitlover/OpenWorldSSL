@@ -7,34 +7,25 @@ from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR, 
 from torch.cuda.amp import GradScaler
 import torchvision.transforms as tv
 
-from data.datasets import ImageNet
+from data.dataset import OpenWorldDataset
 from utils.dist_utils import is_distributed_set
 
 
-def build_transform(img_size: int = 224, is_train: bool = False) -> tv.Compose:
-    if is_train:
-        transform = tv.Compose([
-            tv.RandomResizedCrop(img_size, scale=(0.08, 1.0), ratio=(3.0 / 4.0, 4.0 / 3.0),
-                                 interpolation=tv.InterpolationMode.BICUBIC),
-            tv.RandomHorizontalFlip(p=0.5),
-            tv.ToTensor()  # [0, 255] -> [0, 1] by dividing 255.
-        ])
-    else:
-        pre_size = 256 if (img_size <= 224) else img_size
-        transform = tv.Compose([
-            tv.Resize(pre_size, interpolation=tv.InterpolationMode.BICUBIC),
-            tv.CenterCrop(img_size),
-            tv.ToTensor()  # [0, 255] -> [0, 1] by dividing 255.
-        ])
-    return transform
+def build_dataset(data_dir: str, is_train: bool, is_label: bool, transform: tv.Compose, cfg: Dict) -> OpenWorldDataset:
+    # cfg = cfg["dataset"]
+    dataset = OpenWorldDataset(
+        dataset_name=cfg["name"].lower(),
+        label_num=cfg["label_num"],
+        label_ratio=cfg["label_ratio"],
+        data_dir=data_dir,
+        is_train=is_train,
+        is_label=is_label
+    )
 
-
-def build_dataset(data_dir, is_train: bool, transform) -> ImageNet:
-    dataset = ImageNet(data_dir, train=is_train, transform=transform)
     return dataset
 
 
-def build_dataloader(dataset: ImageNet, is_train: bool, cfg: Dict) -> DataLoader:
+def build_dataloader(dataset: OpenWorldDataset, is_train: bool, cfg: Dict) -> DataLoader:
     if is_train:
         if is_distributed_set():
             sampler = DistributedSampler(dataset, shuffle=True, seed=0, drop_last=True)

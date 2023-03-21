@@ -6,6 +6,12 @@ img_size: 224
 gps: 8  # this configuration file is set for 8-GPUs
 
 # ---------------------------------------------------------------- #
+dataset:
+  name: "cifar10"         # "cifar10" "cifar100" "imagenet"
+  label_num: 50
+  label_ratio: 0.5
+
+# ---------------------------------------------------------------- #
 wandb:
   mode: "online"
   notes: null
@@ -23,6 +29,8 @@ model:
   head:
     name: "cls"
     num_classes: 1000
+
+  fixmatch_threshold: 0.95
 
 loss: # Cross-entropy
   label_smoothing: 0.1
