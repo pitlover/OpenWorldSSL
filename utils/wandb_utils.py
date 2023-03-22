@@ -3,7 +3,7 @@ import os
 import platform
 import wandb
 
-from bluestar.utils.dist_utils import is_master, broadcast_objects, is_distributed_set, barrier
+from utils.dist_utils import is_master, broadcast_objects, is_distributed_set, barrier
 
 __all__ = ["set_wandb"]
 
@@ -34,6 +34,7 @@ def set_wandb(cfg: Dict, force_mode: Optional[str] = None) -> Optional[str]:
         wandb_group = cfg["wandb"]["group"] if ("group" in cfg["wandb"]) else None
         server_name = platform.node()
         wandb_note = server_name + (f"-{wandb_note}" if (wandb_note is not None) else "")
+        wandb_tags = [cfg["wandb"]["tags_dataset"], cfg["wandb"]["tags_model"]]
 
         wandb.init(
             dir=save_dir,
@@ -41,6 +42,7 @@ def set_wandb(cfg: Dict, force_mode: Optional[str] = None) -> Optional[str]:
             project=wandb_project,
             name=wandb_name,
             notes=wandb_note,
+            tags=wandb_tags,
             mode=wandb_mode,
             resume="allow",
             id=wandb_id,

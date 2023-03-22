@@ -1,17 +1,32 @@
-from typing import Dict
+from typing import Dict, List
 import torch.nn as nn
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch.optim import SGD, Adam, AdamW
 from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR, ConstantLR
 from torch.cuda.amp import GradScaler
-import torchvision.transforms as tv
 
 from data.dataset import OpenWorldDataset
 from utils.dist_utils import is_distributed_set
 
+from model.nach import NACH
+from wrapper.NACHWrapper import NACHWrapper
 
-def build_dataset(data_dir: str, is_train: bool, is_label: bool, transform: tv.Compose, cfg: Dict) -> OpenWorldDataset:
+
+def build_model(cfg: Dict, num_classes: int, world_size: int) -> nn.Module:
+    # cfg = cfg["model"]
+    model_name = cfg["name"].lower()
+
+    if "nach" in model_name:
+        model = NACHWrapper(cfg, NACH(cfg["model"], cfg["loss"], num_classes=num_classes))
+    else:
+        raise ValueError(f"Unsupported model type {model_name}.")
+
+    return model
+
+
+def build_dataset(data_dir: str, is_train: bool, is_label: bool, seed: int, cfg: Dict,
+                  unlabeled_idxs: List = None) -> OpenWorldDataset:
     # cfg = cfg["dataset"]
     dataset = OpenWorldDataset(
         dataset_name=cfg["name"].lower(),
@@ -19,13 +34,15 @@ def build_dataset(data_dir: str, is_train: bool, is_label: bool, transform: tv.C
         label_ratio=cfg["label_ratio"],
         data_dir=data_dir,
         is_train=is_train,
-        is_label=is_label
+        is_label=is_label,
+        seed=seed,
+        unlabeled_idxs=unlabeled_idxs
     )
 
     return dataset
 
 
-def build_dataloader(dataset: OpenWorldDataset, is_train: bool, cfg: Dict) -> DataLoader:
+def build_dataloader(dataset: OpenWorldDataset, batch_size: int, is_train: bool, cfg: Dict) -> DataLoader:
     if is_train:
         if is_distributed_set():
             sampler = DistributedSampler(dataset, shuffle=True, seed=0, drop_last=True)
@@ -44,11 +61,11 @@ def build_dataloader(dataset: OpenWorldDataset, is_train: bool, cfg: Dict) -> Da
     # When using DistributedSampler, don't forget to call dataloader.sampler.set_epoch(epoch)
 
     kwargs = dict(
-        batch_size=cfg["batch_size"],  # per-process (=per-GPU)
+        batch_size=batch_size,  # per-process (=per-GPU)
         shuffle=shuffle,
         sampler=sampler,
         num_workers=cfg.get("num_workers", 1),  # per-process
-        collate_fn=ImageNet.fast_collate_imagenet,
+        # collate_fn=ImageNet.fast_collate_imagenet,
         pin_memory=True,
         drop_last=drop_last,
         prefetch_factor=2,
@@ -102,7 +119,7 @@ def build_scheduler(optimizer: SGD, cfg: Dict, iter_per_epoch: int, num_epoch: i
                                total_iters=0)
     elif scheduler_type == "cos":
         scheduler = CosineAnnealingLR(optimizer,
-                                      T_max=num_epoch * iter_per_epoch,
+                                      T_max=num_epoch,
                                       eta_min=cfg.get("min_lr", 0.0),
                                       last_epoch=-1)
     elif scheduler_type == "custom":

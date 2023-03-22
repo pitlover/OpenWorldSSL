@@ -15,7 +15,7 @@ def prepare_config():
     """All-in-one common workflow."""
     parser = default_parser()
     args = parser.parse_args()
-    register_custom_resolvers()
+    # register_custom_resolvers()
     d_config = load_config(args.config)
     d_config = override_config_by_cli(d_config, args.script_args)
     config = resolve_config(d_config)
@@ -26,6 +26,7 @@ def default_parser() -> ArgumentParser:
     parser = ArgumentParser()
     parser.add_argument("--config", type=str, help="YAML configuration", required=True)
     parser.add_argument("--debug", action="store_true", help="Debugging flag")
+    parser.add_argument("--eval", action="store_true", help="Testing flag")
     parser.add_argument("script_args", nargs=REMAINDER, help="Override config by CLI")
     return parser
 

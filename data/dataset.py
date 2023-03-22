@@ -1,4 +1,4 @@
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 import os
 from os.path import join
 import torch
@@ -7,54 +7,10 @@ import numpy as np
 import pickle
 import torchvision.transforms as tv
 from torchvision.datasets import CIFAR10, CIFAR100
-from torch.utils.data import Dataset
 
-
-class OpenWorldDataset(Dataset):
-    def __init__(self,
-                 dataset_name: str,
-                 label_num: int,
-                 label_ratio: float,
-                 data_dir: str,
-                 is_train: bool,
-                 is_label: bool
-                 ):
-        super().__init__()
-
-        self.dataset_name = dataset_name
-        self.data_dir = data_dir
-        self.is_train = is_train
-        self.is_label = is_label
-        self.label_num = label_num
-        self.label_ratio = label_ratio
-
-        label_args = dict(label_num=label_num, label_ratio=label_ratio)
-
-        if dataset_name == "cifar10":
-            self.num_class = 10
-            dataset_class = Cifar10
-        elif dataset_name == "cifar100":
-            self.num_class = 100
-            raise NotImplementedError("Not implement yet Cifar100!")
-        elif dataset_name == "imagenet":
-            self.num_class = 100
-            raise NotImplementedError("Not implement yet Imagenet!")
-
-        else:
-            raise ValueError("Unknown dataset: {}".format(dataset_name))
-
-        self.dataset = dataset_class(
-            data_dir=self.data_dir,
-            is_train=self.is_train,
-            is_label=self.is_label,
-            num_class=self.num_class,
-            transform=self.get_transform,
-            **label_args
-        )
-
-    @property
-    def get_transform(self) -> tv.Compose:
-        if "cifar" in self.dataset_name:
+class Transform:
+    def __init__(self, dataset_name: str, is_train: bool):
+        if "cifar" in dataset_name:
             dict_transform = {
                 'train': tv.Compose([
                     tv.RandomCrop(32, padding=4),
@@ -67,7 +23,7 @@ class OpenWorldDataset(Dataset):
                     tv.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
                 ])
             }
-        elif "imagnet" in self.dataset_name:
+        elif "imagnet" in dataset_name:
             dict_transform = {
                 "train": tv.Compose([
                     tv.RandomResizedCrop(224, scale=(0.5, 1.0)),
@@ -83,41 +39,59 @@ class OpenWorldDataset(Dataset):
                 ])
             }
 
-        return dict_transform['train'] if self.is_train else dict_transform['test']
+        self.transform = dict_transform['train'] if is_train else dict_transform['test']
 
-    def __len__(self) -> int:
-        return len(self.dataset)
+    def __call__(self, inp):
+        out1 = self.transform(inp)
+        out2 = self.transform(inp)
+        return out1, out2
 
-    def __getitem__(self, index: int) -> Dict:
-        img, aug_img, label, img_path = self.dataset[index]
 
-        ret = {
-            "index": index,
-            "img": img,
-            "aug_img": aug_img,
-            "label": label,
-            "img_path": img_path
-        }
+def OpenWorldDataset(dataset_name: str,
+                     label_num: int,
+                     label_ratio: float,
+                     data_dir: str,
+                     is_train: bool,
+                     is_label: bool,
+                     seed: int,
+                     unlabeled_idxs: None,
+                     ):
+    extra_args = dict(label_num=label_num, label_ratio=label_ratio, seed=seed)
 
-        return ret
+    if dataset_name == "cifar10":
+        dataset_class = Cifar10
+    elif dataset_name == "cifar100":
+        raise NotImplementedError("Not implement yet Cifar100!")
+    elif dataset_name == "imagenet":
+        raise NotImplementedError("Not implement yet Imagenet!")
+
+    else:
+        raise ValueError("Unknown dataset: {}".format(dataset_name))
+
+    return dataset_class(
+        data_dir=data_dir,
+        is_label=is_label,
+        transform=Transform(dataset_name=dataset_name, is_train=is_train),
+        unlabeled_idxs=unlabeled_idxs,
+        **extra_args
+    )
 
 
 class Cifar10(CIFAR10):
     def __init__(self,
                  data_dir: str,
-                 is_train: bool,
-                 transform: tv.Compose,
-                 num_class: int,
                  is_label: bool,
+                 transform: tv.Compose,
                  label_num: int,
                  label_ratio: float,
-                 rand_number: int = 0,
-                 download: bool = True,
-                 unlabeled_index=None,
+                 seed: int = 0,
+                 unlabeled_idxs: List = None,
                  ):
-        super().__init__()
+        super(CIFAR10, self).__init__(data_dir, True, transform=transform, target_transform=None,
+                                      download=True)
 
         downloaded_list = self.train_list
+        print(downloaded_list)
         self.data = []
         self.targets = []
 
@@ -136,10 +110,10 @@ class Cifar10(CIFAR10):
         self.data = self.data.transpose((0, 2, 3, 1))  # convert to HWC
 
         labeled_classes = range(label_num)
-        np.random.seed(rand_number)
+        np.random.seed(seed)
 
-        if labeled:
-            self.labeled_idxs, self.unlabeled_idxs = self.get_labeled_index(labeled_classes, labeled_ratio)
+        if is_label:
+            self.labeled_idxs, self.unlabeled_idxs = self.get_labeled_index(labeled_classes, label_ratio)
             self.shrink_data(self.labeled_idxs)
         else:
             self.shrink_data(unlabeled_idxs)
