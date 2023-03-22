@@ -192,21 +192,16 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
     # Initialize
     # ======================================================================================== #
     device, local_rank = set_dist(device_type="cuda")
-    print(local_rank)
 
     if is_master():
         pprint.pprint(cfg)  # print config to check if all arguments are correctly given.
 
-    print(f"{local_rank}: wandbset start")
     save_dir = set_wandb(cfg, force_mode="disabled" if debug else None)
-    print(f"{local_rank}: wandbset end")
     set_seed(seed=cfg["seed"] + local_rank)
-    print(f"{local_rank}: wandbset end")
 
     # ======================================================================================== #
     # Data
     # ======================================================================================== #
-    print(f"{local_rank}: dataset start")
     data_dir = cfg["data_dir"]
 
     train_label_dataset = build_dataset(data_dir, is_train=True, is_label=True, seed=cfg["seed"],
@@ -231,9 +226,8 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
     # ======================================================================================== #
     model = build_model(cfg, num_classes=cfg["dataset"]["num_class"], world_size=get_world_size())
     model = model.to(device)
-    print(f"{local_rank}{is_distributed_set()}")
+
     if is_distributed_set():
-        print(f"model DDP {local_rank}")
         model = DistributedDataParallel(model, device_ids=[local_rank], output_device=device)
         # model = nn.SyncBatchNorm.convert_sync_batchnorm(model)  # optional for ImageNet
         model_m = model.module  # actual model without wrapping
@@ -246,10 +240,10 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
         print(f"Model parameters: {p1} tensors, {p2} elements.")
 
     if eval:
-        if cfg["resume"]["checkpoint"] == None:
-            raise ValueError(f"Eval mode requires checkpoint.")
-        else:
+        if cfg["resume"]["checkpoint"] != None:
             ckpt = torch.load(cfg["resume"]["checkpoint"], map_location=device)
+        else:
+            raise ValueError(f"Eval mode requires checkpoint.")
     elif cfg["resume"]["checkpoint"] is not None:
         # checkpoint: {"model", "optimizer", "scheduler", "stats"}
         ckpt = torch.load(cfg["resume"]["checkpoint"], map_location=device)
@@ -287,13 +281,11 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
     current_epoch = 0
     current_iter = 0
     current_best1 = 0.0  # accuracy top-1
-    current_best5 = 0.0  # accuracy top-5
 
     if ckpt is not None:  # Eval
         current_epoch = ckpt["stats"]["epoch"]
         current_iter = ckpt["stats"]["iter"]
         current_best1 = ckpt["stats"]["best1"]
-        current_best5 = ckpt["stats"]["best5"]
         max_epochs = ckpt["stats"]["max_epochs"]
 
         # -------- check -------- #
@@ -333,7 +325,7 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
             ckpt["scheduler"] = scheduler.state_dict()
             ckpt["scaler"] = scaler.state_dict()
             ckpt["stats"] = OrderedDict(epoch=current_epoch, iter=current_iter,
-                                        best1=current_best1, best5=current_best5)
+                                        best1=current_best1)
             torch.save(ckpt, os.path.join(save_dir, "latest.ckpt"))
             s += f"... save checkpoint to {os.path.join(save_dir, 'latest.ckpt')}"
             print(s)
@@ -372,7 +364,7 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
                     ckpt["scheduler"] = scheduler.state_dict()
                     ckpt["scaler"] = scaler.state_dict()
                     ckpt["stats"] = OrderedDict(epoch=current_epoch, iter=current_iter, max_epochs=max_epochs,
-                                                best1=current_best1, best5=current_best5)
+                                                best1=current_best1)
                     torch.save(ckpt, os.path.join(save_dir, "best.ckpt"))
                     s += f"... save checkpoint to {os.path.join(save_dir, 'latest.ckpt')}"
                     print(s)

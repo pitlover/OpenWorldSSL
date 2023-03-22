@@ -1,0 +1,2 @@
+1. Dataset train+test -> is_train = True?
+2. Backbone final layer freeze?
