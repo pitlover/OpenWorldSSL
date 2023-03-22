@@ -13,7 +13,7 @@ from model.nach import NACH
 from wrapper.NACHWrapper import NACHWrapper
 
 
-def build_model(cfg: Dict, num_classes: int, world_size: int) -> nn.Module:
+def build_model(cfg: Dict, num_classes: int) -> nn.Module:
     # cfg = cfg["model"]
     model_name = cfg["name"].lower()
 

@@ -8,9 +8,7 @@ import torch
 import torch.cuda.amp as amp
 from torch.nn.parallel.distributed import DistributedDataParallel
 from torch.nn.utils.clip_grad import clip_grad_norm_
-import sys
 
-sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))))
 
 from utils.config_utils import prepare_config
 from utils.wandb_utils import set_wandb
@@ -140,7 +138,6 @@ def valid_epoch(
         device: torch.device,
         current_iter: int,
 ) -> Dict:
-    print_interval = 4  # heuristic
     fp16 = cfg.get("fp16", False)
 
     model.eval()
@@ -159,12 +156,6 @@ def valid_epoch(
         result["loss"] += output["loss"]
         result["acc1"] += output["acc1"]
         result["count"] += 1
-
-        if (it > 0) and (it % print_interval == 0):
-            s = f"... samples: {result['count'] * int(label.shape[0]) * get_world_size()} " \
-                f"(valid done: {it / len(dataloader) * 100:.2f} %)"
-            if is_master():
-                print(s)
 
     result["loss"] /= result["count"]
     result["acc1"] /= result["count"]
@@ -222,7 +213,7 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
     # ======================================================================================== #
     # Model
     # ======================================================================================== #
-    model = build_model(cfg, num_classes=cfg["dataset"]["num_class"], world_size=get_world_size())
+    model = build_model(cfg, num_classes=cfg["dataset"]["num_class"])
     model = model.to(device)
 
     if is_distributed_set():
