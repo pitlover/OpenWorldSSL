@@ -51,8 +51,6 @@ def train_epoch(
 
     data_start_time = time.time()
     for it, _ in enumerate(label_dataloader):
-        print(_)
-        exit()
         s = time_log()
         s += f"Current iter: {current_iter} (epoch done: {it / len(label_dataloader) * 100:.2f} %)\n"
 
