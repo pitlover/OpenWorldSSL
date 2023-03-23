@@ -27,10 +27,7 @@ resume:
 model:
   pretrained: "./pretrained/simclr_cifar_10.pth.tar"
   backbone:
-    name: "resnet18"      # "resnet18"
-  head:
-    name: "cls"
-    num_classes: 1000
+    name: "resnet18"
 
   fixmatch_threshold: 0.95
 

@@ -232,6 +232,9 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
         p1, p2 = count_params(model_m.parameters())
         print(f"Model parameters: {p1} tensors, {p2} elements.")
 
+        # for name, param in model.named_parameters():
+        #     print(name, param.requires_grad)
+
     if eval:
         if cfg["resume"]["checkpoint"] != None:
             ckpt = torch.load(cfg["resume"]["checkpoint"], map_location=device)

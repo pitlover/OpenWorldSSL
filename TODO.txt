@@ -1,2 +1,3 @@
-1. Dataset train+test -> is_train = True?
-2. Backbone final layer freeze?
+Dataset 바뀔 때마다 확인해야 할 것.
+1. Dataloader의 data image 확인하기,
+2. Freeze layer 확인하기
