@@ -1,12 +1,10 @@
-from typing import Optional, Dict, List
-import os
+from typing import List
 from os.path import join
-import torch
-import torch.nn as nn
 import numpy as np
 import pickle
 import torchvision.transforms as tv
-from torchvision.datasets import CIFAR10, CIFAR100
+from torchvision.datasets import CIFAR10
+from data.randaugment import RandAugmentMC
 
 
 class Transform:
@@ -42,11 +40,41 @@ class Transform:
 
         self.transform = dict_transform['train'] if is_train else dict_transform['test']
 
-    def __call__(self, inp):
-        out1 = self.transform(inp)
-        out2 = self.transform(inp)
+        self.simclr = tv.Compose([
+            tv.RandomResizedCrop(size=32, scale=(0.2, 1.)),
+            tv.RandomHorizontalFlip(),
+            tv.RandomApply([
+                tv.ColorJitter(0.4, 0.4, 0.4, 0.1)
+            ], p=0.8),
+            tv.RandomGrayscale(p=0.2),
+            tv.ToTensor(),
+            tv.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+        ])
 
-        return out1, out2
+        self.fixmatch_weak = tv.Compose([
+            tv.RandomHorizontalFlip(),
+            tv.RandomCrop(size=32,
+                          padding=int(32 * 0.125),
+                          padding_mode='reflect'),
+            tv.ToTensor(),
+            tv.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+        ])
+
+        self.fixmatch_strong = tv.Compose([
+            tv.RandomHorizontalFlip(),
+            tv.RandomCrop(size=32,
+                          padding=int(32 * 0.125),
+                          padding_mode='reflect'),
+            RandAugmentMC(n=2, m=10),
+            tv.ToTensor(),
+            tv.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+        ])
+
+    def __call__(self, inp):
+        out1, out2 = self.transform(inp), self.transform(inp)
+        out_weak, out_aug = self.fixmatch_weak(inp), self.fixmatch_strong(inp)
+
+        return out1, out2, out_weak, out_aug
 
 
 def OpenWorldDataset(dataset_name: str,

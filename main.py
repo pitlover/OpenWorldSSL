@@ -18,6 +18,7 @@ from utils.dist_utils import all_reduce_dict
 from utils.print_utils import time_log
 from utils.param_utils import count_params, compute_param_norm
 
+from itertools import cycle
 from build import (build_dataset, build_dataloader, build_model,
                    build_optimizer, build_scheduler, build_scaler)
 from wrapper.NACHWrapper import NACHWrapper
@@ -47,16 +48,27 @@ def train_epoch(
     backward_time = 0.0
     step_time = 0.0
 
+    unlabel_dataloader_iter = cycle(unlabel_dataloader)
     data_start_time = time.time()
-    for it, data in enumerate(label_dataloader):
+    for it, label_data in enumerate(label_dataloader):
         s = time_log()
         s += f"Current iter: {current_iter} (epoch done: {it / len(label_dataloader) * 100:.2f} %)\n"
 
         # -------------------------------- data -------------------------------- #
-        (img1, img2), label = data
-        img1 = img1.to(device, non_blocking=True)
-        img2 = img2.to(device, non_blocking=True)
-        label = label.to(device, non_blocking=True)
+        (img1, img2, aug_weak, aug_strong), label = label_data
+        (uimg1, uimg2, uaug_weak, uaug_strong), ulabel = next(unlabel_dataloader_iter)
+
+        img1 = torch.cat([img1, uimg1], 0)
+        img2 = torch.cat([img2, uimg2], 0)
+        aug_weak = torch.cat([aug_weak, uaug_weak], 0)
+        aug_strong = torch.cat([aug_strong, uaug_strong], 0)
+
+        img1, img2, aug_weak, aug_strong, label = img1.to(device, non_blocking=True), \
+                                                  img2.to(device, non_blocking=True), \
+                                                  aug_weak.to(device, non_blocking=True), \
+                                                  aug_strong.to(device, non_blocking=True), \
+                                                  label.to(device, non_blocking=True)
+        model_input = (img1, label, img2, aug_weak, aug_strong)
         data_time = time.time() - data_start_time
 
         # -------------------------------- loss -------------------------------- #
@@ -66,7 +78,8 @@ def train_epoch(
         if it % num_accum == (num_accum - 1):  # update step
             forward_start_time = time.time()
             with amp.autocast(enabled=fp16):
-                output = model(img, label)  # {"loss", "acc1"}
+                output = model(img1=img1, img2=img2, aug_weak=aug_weak,
+                               aug_strong=aug_strong, label=label, iter=it)  # {"loss", "acc1"}
             forward_time = time.time() - forward_start_time
 
             backward_start_time = time.time()
@@ -86,7 +99,8 @@ def train_epoch(
         elif isinstance(model, DistributedDataParallel):  # non-update step and DDP
             with model.no_sync():
                 with amp.autocast(enabled=fp16):
-                    output = model(img, label)  # {"loss", "acc1"}
+                    output = model(img1=img1, img2=img2, aug_weak=aug_weak,
+                                   aug_strong=aug_strong, label=label, iter=it)  # {"loss", "acc1"}
 
                 loss = output["loss"]
                 loss = loss / num_accum
@@ -94,7 +108,8 @@ def train_epoch(
 
         else:  # non-update step and not DDP
             with amp.autocast(enabled=fp16):
-                output = model(img, label)  # {"loss", "acc1"}
+                output = model(img1=img1, img2=img2, aug_weak=aug_weak,
+                               aug_strong=aug_strong, label=label, iter=it)  # {"loss", "acc1"}
 
             loss = output["loss"]
             loss = loss / num_accum
@@ -150,10 +165,10 @@ def valid_epoch(
         # -------------------------------- data -------------------------------- #
         img = img.to(device, non_blocking=True)
         label = label.to(device, non_blocking=True)
-
+        model_input = (img, label)
         # -------------------------------- loss -------------------------------- #
         with amp.autocast(enabled=fp16):
-            output = model(img, label)  # {"loss", "acc1"}
+            output = model(img1=img, label=label, iter=it)  # {"loss", "acc1"}
 
         result["loss"] += output["loss"]
         result["acc1"] += output["acc1"]
@@ -209,8 +224,10 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
                                                                "batch_size"] - labeled_batch_size,
                                                 is_train=True, cfg=cfg["dataloader"]["train"])
 
+    # Following previous works, we test unlabeled dataset in 'trainset'
     valid_dataset = build_dataset(data_dir, is_train=False, is_label=False, seed=cfg["seed"],
-                                  cfg=cfg["dataset"], unlabeled_idxs=train_label_dataset.unlabeled_idxs)
+                                  cfg=cfg["dataset"],
+                                  unlabeled_idxs=train_label_dataset.unlabeled_idxs)
     valid_dataloader = build_dataloader(valid_dataset, batch_size=cfg["dataloader"]["valid"]["batch_size"],
                                         is_train=False, cfg=cfg["dataloader"]["valid"])
 
