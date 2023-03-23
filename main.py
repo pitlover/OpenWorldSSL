@@ -3,12 +3,12 @@ from collections import OrderedDict
 import os
 import time
 import pprint
+
 import wandb
 import torch
 import torch.cuda.amp as amp
 from torch.nn.parallel.distributed import DistributedDataParallel
 from torch.nn.utils.clip_grad import clip_grad_norm_
-
 
 from utils.config_utils import prepare_config
 from utils.wandb_utils import set_wandb
@@ -48,12 +48,14 @@ def train_epoch(
     step_time = 0.0
 
     data_start_time = time.time()
-    for it, _ in enumerate(label_dataloader):
+    for it, data in enumerate(label_dataloader):
         s = time_log()
         s += f"Current iter: {current_iter} (epoch done: {it / len(label_dataloader) * 100:.2f} %)\n"
 
         # -------------------------------- data -------------------------------- #
-        img = img.to(device, non_blocking=True)
+        (img1, img2), label = data
+        img1 = img1.to(device, non_blocking=True)
+        img2 = img2.to(device, non_blocking=True)
         label = label.to(device, non_blocking=True)
         data_time = time.time() - data_start_time
 
@@ -203,12 +205,14 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
     train_label_dataloader = build_dataloader(train_label_dataset, batch_size=labeled_batch_size, is_train=True,
                                               cfg=cfg["dataloader"]["train"])
     train_unlabel_dataloader = build_dataloader(train_unlabel_dataset,
-                                              batch_size=cfg["dataloader"]["train"]["batch_size"] - labeled_batch_size,
-                                              is_train=True, cfg=cfg["dataloader"]["train"])
+                                                batch_size=cfg["dataloader"]["train"][
+                                                               "batch_size"] - labeled_batch_size,
+                                                is_train=True, cfg=cfg["dataloader"]["train"])
 
     valid_dataset = build_dataset(data_dir, is_train=False, is_label=False, seed=cfg["seed"],
                                   cfg=cfg["dataset"], unlabeled_idxs=train_label_dataset.unlabeled_idxs)
-    valid_dataloader = build_dataloader(valid_dataset, is_train=False, cfg=cfg["dataloader"]["valid"])
+    valid_dataloader = build_dataloader(valid_dataset, batch_size=cfg["dataloader"]["valid"]["batch_size"],
+                                        is_train=False, cfg=cfg["dataloader"]["valid"])
 
     # ======================================================================================== #
     # Model
@@ -297,11 +301,13 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
 
         if is_distributed_set():
             # reset random seed of sampler, sampler should be DistributedSampler.
-            train_dataloader.sampler.set_epoch(current_epoch)  # noqa
+            train_label_dataloader.sampler.set_epoch(current_epoch)  # noqa
+            train_unlabel_dataloader.sampler.set_epoch(current_epoch)  # noqa
 
         # -------- train body -------- #
         epoch_start_time = time.time()  # second
-        current_iter = train_epoch(model, optimizer, scheduler, scaler, train_label_dataloader, train_unlabel_dataloader,
+        current_iter = train_epoch(model, optimizer, scheduler, scaler, train_label_dataloader,
+                                   train_unlabel_dataloader,
                                    train_cfg, device, current_iter)
         epoch_time = time.time() - epoch_start_time
         if is_master():

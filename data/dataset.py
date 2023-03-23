@@ -8,6 +8,7 @@ import pickle
 import torchvision.transforms as tv
 from torchvision.datasets import CIFAR10, CIFAR100
 
+
 class Transform:
     def __init__(self, dataset_name: str, is_train: bool):
         if "cifar" in dataset_name:
@@ -44,6 +45,7 @@ class Transform:
     def __call__(self, inp):
         out1 = self.transform(inp)
         out2 = self.transform(inp)
+
         return out1, out2
 
 
@@ -59,7 +61,13 @@ def OpenWorldDataset(dataset_name: str,
     extra_args = dict(label_num=label_num, label_ratio=label_ratio, seed=seed)
 
     if dataset_name == "cifar10":
-        dataset_class = Cifar10
+        dataset_class = Cifar10(
+            data_dir=data_dir,
+            is_label=is_label,
+            transform=Transform(dataset_name=dataset_name, is_train=is_train),
+            unlabeled_idxs=unlabeled_idxs,
+            **extra_args
+        )
     elif dataset_name == "cifar100":
         raise NotImplementedError("Not implement yet Cifar100!")
     elif dataset_name == "imagenet":
@@ -68,36 +76,31 @@ def OpenWorldDataset(dataset_name: str,
     else:
         raise ValueError("Unknown dataset: {}".format(dataset_name))
 
-    return dataset_class(
-        data_dir=data_dir,
-        is_label=is_label,
-        transform=Transform(dataset_name=dataset_name, is_train=is_train),
-        unlabeled_idxs=unlabeled_idxs,
-        **extra_args
-    )
+    return dataset_class
 
 
 class Cifar10(CIFAR10):
     def __init__(self,
                  data_dir: str,
                  is_label: bool,
-                 transform: tv.Compose,
-                 label_num: int,
-                 label_ratio: float,
+                 is_train: bool = True,
+                 transform: tv.Compose = None,
+                 label_num: int = 50,
+                 label_ratio: float = 0.5,
                  seed: int = 0,
                  unlabeled_idxs: List = None,
                  ):
-        super(CIFAR10, self).__init__(data_dir, True, transform=transform, target_transform=None,
+        super(Cifar10, self).__init__(data_dir, train=is_train, transform=transform, target_transform=None,
                                       download=True)
 
         downloaded_list = self.train_list
-        print(downloaded_list)
+
         self.data = []
         self.targets = []
 
         # now load the picked numpy arrays
         for file_name, checksum in downloaded_list:
-            file_path = join(self.data_dir, self.base_folder, file_name)
+            file_path = join(data_dir, self.base_folder, file_name)
             with open(file_path, 'rb') as f:
                 entry = pickle.load(f, encoding='latin1')
                 self.data.append(entry['data'])
@@ -112,11 +115,12 @@ class Cifar10(CIFAR10):
         labeled_classes = range(label_num)
         np.random.seed(seed)
 
-        if is_label:
-            self.labeled_idxs, self.unlabeled_idxs = self.get_labeled_index(labeled_classes, label_ratio)
-            self.shrink_data(self.labeled_idxs)
-        else:
-            self.shrink_data(unlabeled_idxs)
+        if is_train:
+            if is_label:
+                self.labeled_idxs, self.unlabeled_idxs = self.get_labeled_index(labeled_classes, label_ratio)
+                self.shrink_data(self.labeled_idxs)
+            else:
+                self.shrink_data(unlabeled_idxs)
 
     def get_labeled_index(self, labeled_classes, labeled_ratio):
         labeled_idxs = []
