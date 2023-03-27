@@ -41,10 +41,10 @@ metric: # Accuracy
 dataloader:
   train:
     batch_size: 512  # per-GPU  (approx. 10GB)
-    num_workers: 2  # per-process
+    num_workers: 8  # per-process
   valid:
     batch_size: 100  # per-GPU
-    num_workers: 2 # per-process
+    num_workers: 8 # per-process
 
 # ---------------------------------------------------------------- #
 optimizer:
@@ -66,7 +66,7 @@ scheduler:
 trainer:
   fp16: true
   max_epochs: 200
-  print_interval_iters: 100
-  valid_interval_epochs: 500
+  print_interval_iters: 50
+  valid_interval_epochs: 10
   clip_grad: 100.0
   num_accum: 1

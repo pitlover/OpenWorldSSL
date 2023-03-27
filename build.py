@@ -18,7 +18,8 @@ def build_model(cfg: Dict, num_classes: int) -> nn.Module:
     model_name = cfg["name"].lower()
 
     if "nach" in model_name:
-        model = NACHWrapper(cfg, NACH(cfg["model"], cfg["loss"], num_classes=num_classes))
+        model = NACHWrapper(cfg, NACH(cfg["model"], cfg["loss"], num_classes=num_classes,
+                                      num_seen=cfg["dataset"]["num_class"] * cfg["dataset"]["label_ratio"]))
     else:
         raise ValueError(f"Unsupported model type {model_name}.")
 

@@ -5,6 +5,7 @@ import time
 import pprint
 
 import wandb
+import numpy as np
 import torch
 import torch.cuda.amp as amp
 from torch.nn.parallel.distributed import DistributedDataParallel
@@ -22,6 +23,8 @@ from itertools import cycle
 from build import (build_dataset, build_dataloader, build_model,
                    build_optimizer, build_scheduler, build_scaler)
 from wrapper.NACHWrapper import NACHWrapper
+from model.functions import AverageMeter
+from model.others.metric import OpenSSLMetric
 
 
 def train_epoch(
@@ -50,6 +53,7 @@ def train_epoch(
 
     unlabel_dataloader_iter = cycle(unlabel_dataloader)
     data_start_time = time.time()
+
     for it, label_data in enumerate(label_dataloader):
         s = time_log()
         s += f"Current iter: {current_iter} (epoch done: {it / len(label_dataloader) * 100:.2f} %)\n"
@@ -68,7 +72,6 @@ def train_epoch(
                                                   aug_weak.to(device, non_blocking=True), \
                                                   aug_strong.to(device, non_blocking=True), \
                                                   label.to(device, non_blocking=True)
-        model_input = (img1, label, img2, aug_weak, aug_strong)
         data_time = time.time() - data_start_time
 
         # -------------------------------- loss -------------------------------- #
@@ -78,8 +81,8 @@ def train_epoch(
         if it % num_accum == (num_accum - 1):  # update step
             forward_start_time = time.time()
             with amp.autocast(enabled=fp16):
-                output = model(img1=img1, img2=img2, aug_weak=aug_weak,
-                               aug_strong=aug_strong, label=label, iter=it)  # {"loss", "acc1"}
+                _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
+                                  aug_strong=aug_strong, iter=it)  # {"loss", "acc1"}
             forward_time = time.time() - forward_start_time
 
             backward_start_time = time.time()
@@ -99,8 +102,9 @@ def train_epoch(
         elif isinstance(model, DistributedDataParallel):  # non-update step and DDP
             with model.no_sync():
                 with amp.autocast(enabled=fp16):
-                    output = model(img1=img1, img2=img2, aug_weak=aug_weak,
-                                   aug_strong=aug_strong, label=label, iter=it)  # {"loss", "acc1"}
+                    _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
+                                      aug_strong=aug_strong,
+                                      iter=it)  # {"loss", "acc1"}
 
                 loss = output["loss"]
                 loss = loss / num_accum
@@ -108,8 +112,8 @@ def train_epoch(
 
         else:  # non-update step and not DDP
             with amp.autocast(enabled=fp16):
-                output = model(img1=img1, img2=img2, aug_weak=aug_weak,
-                               aug_strong=aug_strong, label=label, iter=it)  # {"loss", "acc1"}
+                _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
+                                  aug_strong=aug_strong, iter=it)  # {"loss", "acc1"}
 
             loss = output["loss"]
             loss = loss / num_accum
@@ -122,8 +126,8 @@ def train_epoch(
             param_norm = compute_param_norm(model.parameters())
             lr = scheduler.get_last_lr()[0]
 
-            s += f"... loss: {output['loss'].item():.6f}\n"
-            s += f"... acc1: {output['acc1'].item():.4f}\n"
+            for k, v in output.items():
+                s += f"... {k}: {v.item() if isinstance(v, torch.Tensor) else v:.6f}\n"
             s += f"... LR: {lr:.6f}\n"
             s += f"... grad/param norm: {grad_norm.item():.3f} / {param_norm.item():.3f}\n"
             s += f"... batch_size x num_accum x gpus = " \
@@ -133,14 +137,16 @@ def train_epoch(
 
             if is_master():
                 print(s)
-                wandb.log({
+                log_dict = {
                     "train_loss": output["loss"].item(),
-                    "train_acc1": output["acc1"].item(),
                     "grad_norm": grad_norm.item(),
                     "param_norm": param_norm.item(),
                     "lr": lr,
                     "iterations": current_iter,
-                })
+                }
+                for k, v in output.items():
+                    log_dict[k] = v.item() if isinstance(v, torch.Tensor) else v
+                wandb.log(log_dict)
 
         current_iter += 1
         data_start_time = time.time()
@@ -152,6 +158,7 @@ def valid_epoch(
         model: NACHWrapper,
         dataloader,
         cfg: Dict,
+        num_seen,
         device: torch.device,
         current_iter: int,
 ) -> Dict:
@@ -160,33 +167,35 @@ def valid_epoch(
     model.eval()
     torch.set_grad_enabled(False)  # same as 'with torch.no_grad():'
 
-    result = dict(loss=0.0, acc1=0.0, count=0)
-    for it, (img, label) in enumerate(dataloader):
+    targets, preds = np.array([]), np.array([])
+    output = {}
+    for it, data in enumerate(dataloader):
         # -------------------------------- data -------------------------------- #
+        (img, _, _, _), label = data
         img = img.to(device, non_blocking=True)
         label = label.to(device, non_blocking=True)
-        model_input = (img, label)
+
         # -------------------------------- loss -------------------------------- #
         with amp.autocast(enabled=fp16):
-            output = model(img1=img, label=label, iter=it)  # {"loss", "acc1"}
+            prob = model(img1=img, label=label, iter=it)
+            _, pred = prob.max(1)
 
-        result["loss"] += output["loss"]
-        result["acc1"] += output["acc1"]
-        result["count"] += 1
+        targets = np.append(targets, label.cpu().numpy())
+        preds = np.append(preds, pred.cpu().numpy())
 
-    result["loss"] /= result["count"]
-    result["acc1"] /= result["count"]
-    result.pop("count")
-    result = all_reduce_dict(result, op="mean")
+    targets, preds = targets.astype(int), preds.astype(int)
 
-    output = dict()
-    output["loss"] = result["loss"].item()
-    output["acc1"] = result["acc1"].item()
+    seen_acc, unseen_acc, all_acc = OpenSSLMetric(targets, preds, labeled_num=num_seen)
+
+    output["all_acc"] = all_acc
+    output["unseen_acc"] = unseen_acc
+    output["seen_acc"] = seen_acc
 
     if is_master():
         wandb.log({
-            "valid_loss": output["loss"],
-            "valid_acc1": output["acc1"],
+            "val_all_acc": output["all_acc"],
+            "val_unseen_acc": output["unseen_acc"],
+            "val_seen_acc": output["seen_acc"],
             "iterations": current_iter,
         })
 
@@ -289,24 +298,26 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
     train_cfg = cfg["trainer"]
     max_epochs = train_cfg["max_epochs"]
     valid_interval = train_cfg["valid_interval_epochs"]
+    num_seen = cfg["dataset"]["num_class"] * cfg["dataset"]["label_ratio"]
 
     # -------- status -------- #
     current_epoch = 0
     current_iter = 0
-    current_best1 = 0.0  # accuracy top-1
+    current_best_unseen = 0.0  # accuracy top-1
 
     if ckpt is not None:  # Eval
         current_epoch = ckpt["stats"]["epoch"]
         current_iter = ckpt["stats"]["iter"]
-        current_best1 = ckpt["stats"]["best1"]
+        current_best_unseen = ckpt["stats"]["best_unseen"]
         max_epochs = ckpt["stats"]["max_epochs"]
 
         # -------- check -------- #
-        valid_result = valid_epoch(model, valid_dataloader, train_cfg, device, current_iter)
+        valid_result = valid_epoch(model, valid_dataloader, train_cfg, num_seen, device, current_iter)
         s = time_log()
         s += f"Resume valid epoch {current_epoch} / {max_epochs}\n"
-        s += f"... loss: {valid_result['loss']:.6f}\n"
-        s += f"... acc1: {valid_result['acc1']:.4f}\n"
+        s += f"... seen_acc: {valid_result['seen_acc']:.4f}\n"
+        s += f"... unseen_acc: {valid_result['unseen_acc']:.4f}\n"
+        s += f"... all_acc: {valid_result['all_acc']:.4f}\n"
         if is_master():
             print(s)
         if eval:
@@ -340,7 +351,7 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
             ckpt["scheduler"] = scheduler.state_dict()
             ckpt["scaler"] = scaler.state_dict()
             ckpt["stats"] = OrderedDict(epoch=current_epoch, iter=current_iter,
-                                        best1=current_best1)
+                                        best_unseen=current_best_unseen)
             torch.save(ckpt, os.path.join(save_dir, "latest.ckpt"))
             s += f"... save checkpoint to {os.path.join(save_dir, 'latest.ckpt')}"
             print(s)
@@ -350,27 +361,28 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
         if current_epoch % valid_interval == 0:
 
             s = time_log()
-            s += f"Start valid epoch {current_epoch} / {max_epochs} (iter: {current_iter})"
+            s += f"| Start valid epoch {current_epoch} / {max_epochs} (iter: {current_iter})   |"
             if is_master():
                 print(s)
 
             valid_start_time = time.time()  # second
-            valid_result = valid_epoch(model, valid_dataloader, train_cfg, device, current_iter)
+            valid_result = valid_epoch(model, valid_dataloader, train_cfg, num_seen, device, current_iter)
             valid_time = time.time() - valid_start_time
 
             s = time_log()
-            s += f"End valid epoch {current_epoch} / {max_epochs}, time: {valid_time:.3f} s\n"
-            s += f"... loss: {valid_result['loss']:.6f}\n"
-            s += f"... acc1: {valid_result['acc1']:.4f}\n"
+            s += f"| End valid epoch {current_epoch} / {max_epochs}, time: {valid_time:.3f}s |\n"
+            s += f"| ... seen_acc: {valid_result['seen_acc']:.4f}               |\n"
+            s += f"| ... unseen_acc: {valid_result['unseen_acc']:.4f}           |\n"
+            s += f"| ... all_acc: {valid_result['all_acc']:.4f}                 |\n"
             if is_master():
                 print(s)
 
-            current_acc1 = valid_result['acc1']
-            if current_best1 <= current_acc1:
+            current_unseen_acc = valid_result['unseen_acc']
+            if current_best_unseen <= current_unseen_acc:
                 s = time_log()
                 s += f"Best updated!\n" \
-                     f"... acc1: {current_best1:.4f} (prev) -> {current_acc1:.4f} (new)\n"
-                current_best1 = current_acc1
+                     f"... unseen_acc: {current_best_unseen:.4f} (prev) -> {current_unseen_acc:.4f} (new)\n"
+                current_best_unseen = current_unseen_acc
                 if is_master():
                     # save checkpoint
                     ckpt = OrderedDict()
@@ -379,14 +391,14 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
                     ckpt["scheduler"] = scheduler.state_dict()
                     ckpt["scaler"] = scaler.state_dict()
                     ckpt["stats"] = OrderedDict(epoch=current_epoch, iter=current_iter, max_epochs=max_epochs,
-                                                best1=current_best1)
+                                                best_unseen=current_best_unseen)
                     torch.save(ckpt, os.path.join(save_dir, "best.ckpt"))
-                    s += f"... save checkpoint to {os.path.join(save_dir, 'latest.ckpt')}"
+                    s += f"... save checkpoint to {os.path.join(save_dir, 'best.ckpt')}"
                     print(s)
             else:
                 s = time_log()
                 s += f"Best not updated.\n" \
-                     f"... acc1: {current_best1:.4f} (best) vs. {current_acc1:.4f} (now)\n"
+                     f"... unseen_acc: {current_best_unseen:.4f} (best) vs. {current_unseen_acc:.4f} (now)\n"
                 if is_master():
                     print(s)
 
