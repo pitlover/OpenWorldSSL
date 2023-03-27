@@ -138,7 +138,6 @@ def train_epoch(
             if is_master():
                 print(s)
                 log_dict = {
-                    "train_loss": output["loss"].item(),
                     "grad_norm": grad_norm.item(),
                     "param_norm": param_norm.item(),
                     "lr": lr,
@@ -303,7 +302,8 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
     # -------- status -------- #
     current_epoch = 0
     current_iter = 0
-    current_best_unseen = 0.0  # accuracy top-1
+    current_best_unseen = 0.0
+    best_epoch, best_iter = 0, 0
 
     if ckpt is not None:  # Eval
         current_epoch = ckpt["stats"]["epoch"]
@@ -380,9 +380,13 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
             current_unseen_acc = valid_result['unseen_acc']
             if current_best_unseen <= current_unseen_acc:
                 s = time_log()
-                s += f"Best updated!\n" \
-                     f"... unseen_acc: {current_best_unseen:.4f} (prev) -> {current_unseen_acc:.4f} (new)\n"
+                s += f"| Best updated!                                          |\n" \
+                     f"| ... previous best was at {best_epoch} epoch, {best_iter} iters |\n" \
+                     f"| ... unseen_acc: {current_best_unseen:.4f} (prev) -> {current_unseen_acc:.4f} (new)\n"
                 current_best_unseen = current_unseen_acc
+                best_iter = current_iter
+                best_epoch = current_epoch
+
                 if is_master():
                     # save checkpoint
                     ckpt = OrderedDict()
@@ -393,12 +397,13 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
                     ckpt["stats"] = OrderedDict(epoch=current_epoch, iter=current_iter, max_epochs=max_epochs,
                                                 best_unseen=current_best_unseen)
                     torch.save(ckpt, os.path.join(save_dir, "best.ckpt"))
-                    s += f"... save checkpoint to {os.path.join(save_dir, 'best.ckpt')}"
+                    s += f"| ... save checkpoint to {os.path.join(save_dir, 'best.ckpt')}"
                     print(s)
             else:
                 s = time_log()
-                s += f"Best not updated.\n" \
-                     f"... unseen_acc: {current_best_unseen:.4f} (best) vs. {current_unseen_acc:.4f} (now)\n"
+                s += f"| Best not updated                                       |\n" \
+                     f"| ... previous best was at {best_epoch} epoch, {best_iter} iters |\n" \
+                     f"| ... unseen_acc: {current_best_unseen:.4f} (best) vs. {current_unseen_acc:.4f} (now)\n"
                 if is_master():
                     print(s)
 
