@@ -56,25 +56,19 @@ class NACH(nn.Module):
         if not self.training:
             return F.softmax(output, dim=1), None, None, None
 
-        output_aug_weak, feat_aug_weak = self.backbone(aug_weak)
-        output_aug_strong, feat_aug_strong = self.backbone(aug_strong)
+        logit_aug_weak, feat_aug_weak = self.backbone(aug_weak)
+        logit_aug_strong, feat_aug_strong = self.backbone(aug_strong)
 
-        # (b * label_ratio, num_class), (b * (1-label_ratio), num_classes)
-        output_aug_weak_label, output_aug_weak_unlabel = output_aug_weak[:num_label], output_aug_weak[num_label:]
-        output_aug_strong_label, output_aug_strong_unlabel = output_aug_strong[:num_label], output_aug_strong[
-                                                                                            num_label:]
         # (b, num_class)
         prob_out = F.softmax(output, dim=1)
-        prob_aug_weak, prob_aug_strong = F.softmax(output_aug_weak, dim=1), F.softmax(output_aug_strong, dim=1)
+        prob_aug_weak, prob_aug_strong = F.softmax(logit_aug_weak, dim=1), F.softmax(logit_aug_strong, dim=1)
 
         feat_detach = feat.detach()
         feat_norm = feat_detach / torch.norm(feat_detach, 2, 1, keepdim=True)  # normalize
 
         cos_distance = torch.mm(feat_norm, feat_norm.t())  # (b, b)
 
-        logit_weak = torch.cat((output_aug_weak_label, output_aug_weak_unlabel), dim=0)
-        logit_strong = torch.cat((output_aug_strong_label, output_aug_strong_unlabel), dim=0)
-        pseudo_label = torch.softmax(logit_weak.detach(), dim=-1)
+        pseudo_label = torch.softmax(logit_aug_weak.detach(), dim=-1)
         max_probs, targets_u = torch.max(pseudo_label, dim=-1)
 
         index_seen, index_unseen = targets_u.lt(self.num_seen).float(), targets_u.ge(self.num_seen).float()
@@ -87,9 +81,9 @@ class NACH(nn.Module):
         seen_prob = torch.sum(index_seen * max_probs) / seen_count + self.eps
         if unseen_count != 0:
             unseen_prob = torch.sum(index_unseen * max_probs) / unseen_count + self.eps
-
-        if unseen_count == 0:
+        elif unseen_count == 0:
             unseen_prob = seen_prob - seen_prob
+
         mask = mask_seen + mask_unseen
 
         positive_pairs = []
@@ -108,13 +102,13 @@ class NACH(nn.Module):
                     selected_idxs = np.random.choice(idxs, 1)
                 positive_pairs.append(int(selected_idxs))
 
-        # Labeled Data Pair
+        # Unlabeled Data Pair
         unlabel_cosine_distance = cos_distance[num_label:, :]
-        vals, pos_idx = torch.topk(unlabel_cosine_distance, 2, dim=1)
+        vals, pos_idx = torch.topk(unlabel_cosine_distance, 2, dim=1)  # (unlabeled, 2), (unlabeled, 2)
 
-        # F-BCE
+        # FBCE
         choose_k = 2  # TODO should be fine-tuned with different task
-        max_pos = torch.topk(cos_distance[:num_label, pos_idx[:, 1]], choose_k, dim=0)[0][choose_k - 1]
+        max_pos = torch.topk(cos_distance[:num_label, pos_idx[:, 1]], choose_k, dim=0)[0][choose_k - 1]  # (unlabeled)
         mask1 = (vals[:, 1] - max_pos).ge(0).float()
         mask0 = (vals[:, 1] - max_pos).lt(0).float()
 
@@ -127,19 +121,20 @@ class NACH(nn.Module):
         pos_sim = torch.bmm(prob_out.view(b, 1, -1), pos_prob.view(b, -1, 1)).squeeze()
         ones = torch.ones_like(pos_sim)
         bce_loss = self.bce_loss(pos_sim, ones)
-        results["bse-loss"] = bce_loss
+        results["bce-loss"] = bce_loss
 
         entropy_loss = self.entropy_loss(torch.mean(prob_out, 0))
-        results["entropy-loss"] = entropy_loss
+        results["entropy-loss"] = entropy_loss  # Regularization Term
 
         cross_entropy_loss = (F.cross_entropy(output[:num_label], label, reduction="none")).mean()
-        results["cross-entropy-loss"] = cross_entropy_loss
+
+        results["cross-entropy-loss"] = cross_entropy_loss  # Supervised Loss
 
         mask_in_bce = torch.ones_like(mask)
         mask_in_bce[num_label:] = mask_in_bce[num_label:] - mask0
 
-        # Logits Alignment
-        fixmatch_loss = self.fixmatch_loss(mask=mask, pseudo_label=pseudo_label, logit_strong=logit_strong,
+        # Logits Alignment (DTA Loss)
+        fixmatch_loss = self.fixmatch_loss(mask=mask, pseudo_label=pseudo_label, logit_strong=logit_aug_strong,
                                            targets_u=targets_u)
         results["fixmatch-loss"] = fixmatch_loss
 

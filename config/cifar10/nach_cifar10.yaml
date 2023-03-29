@@ -7,8 +7,8 @@ data_dir: "../Datasets"
 dataset:
   name: "cifar10"
   num_class: 10
-  label_num: 50
-  label_ratio: 0.5
+  label_num: 5   # Number of Seen Class
+  label_ratio: 0.5  # Ratio of Lables
 
 # ---------------------------------------------------------------- #
 wandb:
@@ -68,6 +68,6 @@ trainer:
   fp16: true
   max_epochs: 200
   print_interval_iters: 50
-  valid_interval_epochs: 10
+  valid_interval_epochs: 1
   clip_grad: 100.0
   num_accum: 1

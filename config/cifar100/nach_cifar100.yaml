@@ -28,7 +28,7 @@ model:
   pretrained: "../Datasets/pretrained/simclr_cifar_100.pth.tar"
   backbone:
     name: "resnet18"
-    is_freeze: false
+    is_freeze: true
   fixmatch_threshold: 0.95
 
 loss:

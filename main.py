@@ -226,7 +226,7 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
                                           cfg=cfg["dataset"], unlabeled_idxs=train_label_dataset.unlabeled_idxs)
 
     labeled_len, unlabeled_len = len(train_label_dataset), len(train_unlabel_dataset)
-    labeled_batch_size = int(cfg["dataloader"]["train"]["batch_size"] * labeled_len / (labeled_len + unlabeled_len))
+    labeled_batch_size = int(cfg["dataloader"]["train"]["batch_size"] * (labeled_len / (labeled_len + unlabeled_len)))
     train_label_dataloader = build_dataloader(train_label_dataset, batch_size=labeled_batch_size, is_train=True,
                                               cfg=cfg["dataloader"]["train"])
     train_unlabel_dataloader = build_dataloader(train_unlabel_dataset,
