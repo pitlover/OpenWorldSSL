@@ -17,12 +17,14 @@ class NACH(nn.Module):
         self.eps = 1e-10
         self.num_classes = num_classes
         self.num_seen = num_seen
+        model_name = cfg["backbone"]["name"].lower()
 
         # ------------------- Model ------------------ #
-        self.backbone = build_resnet(model_name=cfg["backbone"]["name"].lower(), num_classes=num_classes)
+        self.backbone = build_resnet(model_name=model_name, num_classes=num_classes)
         self.backbone.load_state_dict(state_dict=torch.load(cfg["pretrained"]),
                                       strict=False)  # Load pretrain with SimCLR
-        self.backbone = freeze_layers(self.backbone)  # (linear or fc) and layer4
+        if cfg["backbone"]["is_freeze"]:
+            self.backbone = freeze_layers(self.backbone, model_name)  # (linear or fc) and layer4
 
         # ------------------- Loss ------------------ #
         self.bce_loss = nn.BCEWithLogitsLoss()
@@ -66,7 +68,7 @@ class NACH(nn.Module):
         prob_aug_weak, prob_aug_strong = F.softmax(output_aug_weak, dim=1), F.softmax(output_aug_strong, dim=1)
 
         feat_detach = feat.detach()
-        feat_norm = feat_detach / torch.norm(feat_detach, 2, 1, keepdim=True)
+        feat_norm = feat_detach / torch.norm(feat_detach, 2, 1, keepdim=True)  # normalize
 
         cos_distance = torch.mm(feat_norm, feat_norm.t())  # (b, b)
 
@@ -85,7 +87,8 @@ class NACH(nn.Module):
         seen_prob = torch.sum(index_seen * max_probs) / seen_count + self.eps
         if unseen_count != 0:
             unseen_prob = torch.sum(index_unseen * max_probs) / unseen_count + self.eps
-        else:
+
+        if unseen_count == 0:
             unseen_prob = seen_prob - seen_prob
         mask = mask_seen + mask_unseen
 
@@ -136,7 +139,8 @@ class NACH(nn.Module):
         mask_in_bce[num_label:] = mask_in_bce[num_label:] - mask0
 
         # Logits Alignment
-        fixmatch_loss = self.fixmatch_loss(mask, pseudo_label, logit_strong, targets_u)
+        fixmatch_loss = self.fixmatch_loss(mask=mask, pseudo_label=pseudo_label, logit_strong=logit_strong,
+                                           targets_u=targets_u)
         results["fixmatch-loss"] = fixmatch_loss
 
         return prob_out, results, seen_prob, unseen_prob

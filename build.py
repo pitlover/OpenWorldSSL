@@ -13,13 +13,15 @@ from model.nach import NACH
 from wrapper.NACHWrapper import NACHWrapper
 
 
-def build_model(cfg: Dict, num_classes: int) -> nn.Module:
-    # cfg = cfg["model"]
+def build_model(cfg: Dict) -> nn.Module:
+    # cfg
     model_name = cfg["name"].lower()
 
     if "nach" in model_name:
-        model = NACHWrapper(cfg, NACH(cfg["model"], cfg["loss"], num_classes=num_classes,
-                                      num_seen=cfg["dataset"]["num_class"] * cfg["dataset"]["label_ratio"]))
+        model = NACHWrapper(cfg,
+                            NACH(cfg["model"], cfg["loss"],
+                                 num_classes=cfg["dataset"]["num_class"],
+                                 num_seen=cfg["dataset"]["label_num"]))
     else:
         raise ValueError(f"Unsupported model type {model_name}.")
 

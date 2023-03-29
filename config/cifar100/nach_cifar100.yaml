@@ -5,8 +5,8 @@ data_dir: "../Datasets"
 
 # ---------------------------------------------------------------- #
 dataset:
-  name: "cifar10"
-  num_class: 10
+  name: "cifar100"
+  num_class: 100
   label_num: 50
   label_ratio: 0.5
 
@@ -25,15 +25,13 @@ resume:
 
 # ---------------------------------------------------------------- #
 model:
-  pretrained: "../Datasets/pretrained/simclr_cifar_10.pth.tar"
+  pretrained: "../Datasets/pretrained/simclr_cifar_100.pth.tar"
   backbone:
     name: "resnet18"
-    is_freeze: True
-
+    is_freeze: false
   fixmatch_threshold: 0.95
 
-loss: # Cross-entropy
-  label_smoothing: 0.1
+loss:
 
 metric: # Accuracy
   top_k: [ 1 ]
@@ -56,18 +54,12 @@ optimizer:
 
 scheduler:
   name: "cos"     # "cos" "custom" "constant"
-  warmup:
-    start_factor: 0.01
-    epochs: 10
-  decay:
-    epochs: 190  # warmup + decay should be the same as trainer.max_epochs
-    min_lr: 1.0e-6
 
 # ---------------------------------------------------------------- #
 trainer:
   fp16: true
   max_epochs: 200
   print_interval_iters: 50
-  valid_interval_epochs: 10
+  valid_interval_epochs: 1
   clip_grad: 100.0
   num_accum: 1

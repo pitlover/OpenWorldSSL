@@ -27,14 +27,16 @@ class Fixmatch(nn.Module):
         self.num_classes = num_classes
 
     def forward(self, mask, pseudo_label, logit_strong, targets_u):
-        if torch.sum(mask) == 0:
-            loss = (F.cross_entropy(logit_strong, targets_u, reduction="none") * mask).mean()
-        elif torch.sum(mask) > 0:
+
+        if torch.sum(mask) > 0:
             p = torch.sum(pseudo_label[mask.bool()], dim=0)
             p = p / torch.sum(pseudo_label[mask.bool()])
             q = torch.ones(self.num_classes, device=mask.device)
             q = q / self.num_classes
             align = torch.log(p / q)
             loss = (F.cross_entropy(logit_strong + align, targets_u, reduction="none") * mask).mean()
+
+        if torch.sum(mask) == 0:
+            loss = (F.cross_entropy(logit_strong, targets_u, reduction="none") * mask).mean()
 
         return loss

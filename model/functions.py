@@ -1,8 +1,14 @@
-def freeze_layers(model):
-    for name, param in model.named_parameters():
-        if ('linear' not in name or 'fc' not in name) and 'layer4' not in name:
-            param.requires_grad = False
+def freeze_layers(model, model_name):
+    if "resnet18" in model_name:
+        fc = "linear"
+    elif "resnet50" in model_name:
+        fc = "fc"
+    else:
+        raise ValueError(f"Not supported Backbone {model_name}.")
 
+    for name, param in model.named_parameters():
+        if fc not in name and 'layer4' not in name:
+            param.requires_grad = False
     return model
 
 

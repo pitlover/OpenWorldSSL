@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.optimize import linear_sum_assignment
+from sklearn import metrics
 
 
 def OpenSSLMetric(targets, preds, labeled_num):
@@ -7,10 +8,12 @@ def OpenSSLMetric(targets, preds, labeled_num):
     unseen_mask = ~seen_mask
 
     seen_acc = accuracy(preds[seen_mask], targets[seen_mask])
-    unseen_acc = accuracy(preds[unseen_mask], targets[unseen_mask])
+    unseen_acc = cluster_acc(preds[unseen_mask], targets[unseen_mask])
     all_acc = cluster_acc(preds, targets)
 
-    return seen_acc, unseen_acc, all_acc
+    unseen_nmi = metrics.normalized_mutual_info_score(targets[unseen_mask], preds[unseen_mask])
+
+    return seen_acc, unseen_acc, all_acc, unseen_nmi
 
 
 def cluster_acc(y_pred, y_true):

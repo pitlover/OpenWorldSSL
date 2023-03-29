@@ -82,7 +82,7 @@ def train_epoch(
             forward_start_time = time.time()
             with amp.autocast(enabled=fp16):
                 _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
-                                  aug_strong=aug_strong, iter=it)  # {"loss", "acc1"}
+                                  aug_strong=aug_strong, iter=it, max_iter=len(label_dataloader))  # {"loss", "acc1"}
             forward_time = time.time() - forward_start_time
 
             backward_start_time = time.time()
@@ -96,7 +96,7 @@ def train_epoch(
             grad_norm = clip_grad_norm_(model.parameters(), max_norm=clip_grad)
             scaler.step(optimizer)
             scaler.update()
-            scheduler.step()
+            # scheduler.step()
             step_time = time.time() - step_start_time
 
         elif isinstance(model, DistributedDataParallel):  # non-update step and DDP
@@ -104,7 +104,7 @@ def train_epoch(
                 with amp.autocast(enabled=fp16):
                     _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
                                       aug_strong=aug_strong,
-                                      iter=it)  # {"loss", "acc1"}
+                                      iter=it, max_iter=len(label_dataloader))  # {"loss", "acc1"}
 
                 loss = output["loss"]
                 loss = loss / num_accum
@@ -113,7 +113,7 @@ def train_epoch(
         else:  # non-update step and not DDP
             with amp.autocast(enabled=fp16):
                 _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
-                                  aug_strong=aug_strong, iter=it)  # {"loss", "acc1"}
+                                  aug_strong=aug_strong, iter=it, max_iter=len(label_dataloader))  # {"loss", "acc1"}
 
             loss = output["loss"]
             loss = loss / num_accum
@@ -184,17 +184,19 @@ def valid_epoch(
 
     targets, preds = targets.astype(int), preds.astype(int)
 
-    seen_acc, unseen_acc, all_acc = OpenSSLMetric(targets, preds, labeled_num=num_seen)
+    seen_acc, unseen_acc, all_acc, unseen_nmi = OpenSSLMetric(targets, preds, labeled_num=num_seen)
 
     output["all_acc"] = all_acc
     output["unseen_acc"] = unseen_acc
     output["seen_acc"] = seen_acc
+    output["unseen_nmi"] = unseen_nmi
 
     if is_master():
         wandb.log({
             "val_all_acc": output["all_acc"],
             "val_unseen_acc": output["unseen_acc"],
             "val_seen_acc": output["seen_acc"],
+            "val_unseen_nmi": output["unseen_nmi"],
             "iterations": current_iter,
         })
 
@@ -242,7 +244,7 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
     # ======================================================================================== #
     # Model
     # ======================================================================================== #
-    model = build_model(cfg, num_classes=cfg["dataset"]["num_class"])
+    model = build_model(cfg)
     model = model.to(device)
 
     if is_distributed_set():
@@ -358,10 +360,10 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
 
         barrier()
         # -------- valid body -------- #
-        if current_epoch % valid_interval == 0:
+        if current_epoch % valid_interval == 0 or current_epoch == max_epochs - 1:
 
             s = time_log()
-            s += f"| Start valid epoch {current_epoch} / {max_epochs} (iter: {current_iter})   |"
+            s += f"| ***** Start valid epoch {current_epoch} / {max_epochs} (iter: {current_iter})"
             if is_master():
                 print(s)
 
@@ -370,18 +372,19 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
             valid_time = time.time() - valid_start_time
 
             s = time_log()
-            s += f"| End valid epoch {current_epoch} / {max_epochs}, time: {valid_time:.3f}s |\n"
-            s += f"| ... seen_acc: {valid_result['seen_acc']:.4f}               |\n"
-            s += f"| ... unseen_acc: {valid_result['unseen_acc']:.4f}           |\n"
-            s += f"| ... all_acc: {valid_result['all_acc']:.4f}                 |\n"
+            s += f"| ***** End valid epoch {current_epoch} / {max_epochs}, time: {valid_time:.3f}s\n"
+            s += f"| ... seen_acc: {valid_result['seen_acc']:.4f}\n"
+            s += f"| ... unseen_acc: {valid_result['unseen_acc']:.4f}\n"
+            s += f"| ... all_acc: {valid_result['all_acc']:.4f}\n"
+            s += f"| ... unseen_nmi: {valid_result['unseen_nmi']:.4f}\n"
             if is_master():
                 print(s)
 
             current_unseen_acc = valid_result['unseen_acc']
             if current_best_unseen <= current_unseen_acc:
                 s = time_log()
-                s += f"| Best updated!                                          |\n" \
-                     f"| ... previous best was at {best_epoch} epoch, {best_iter} iters |\n" \
+                s += f"| ***** Best updated!\n" \
+                     f"| ... previous best was at {best_epoch} epoch, {best_iter} iters\n" \
                      f"| ... unseen_acc: {current_best_unseen:.4f} (prev) -> {current_unseen_acc:.4f} (new)\n"
                 current_best_unseen = current_unseen_acc
                 best_iter = current_iter
@@ -401,13 +404,15 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
                     print(s)
             else:
                 s = time_log()
-                s += f"| Best not updated                                       |\n" \
-                     f"| ... previous best was at {best_epoch} epoch, {best_iter} iters |\n" \
+                s += f"| ***** Best not updated\n" \
+                     f"| ... previous best was at {best_epoch} epoch, {best_iter} iters\n" \
                      f"| ... unseen_acc: {current_best_unseen:.4f} (best) vs. {current_unseen_acc:.4f} (now)\n"
                 if is_master():
                     print(s)
 
             barrier()
+
+        scheduler.step()
         current_epoch += 1
 
 

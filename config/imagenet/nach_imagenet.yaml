@@ -5,8 +5,8 @@ data_dir: "../Datasets"
 
 # ---------------------------------------------------------------- #
 dataset:
-  name: "cifar10"
-  num_class: 10
+  name: "imagenet"
+  num_class: 100
   label_num: 50
   label_ratio: 0.5
 
@@ -25,10 +25,9 @@ resume:
 
 # ---------------------------------------------------------------- #
 model:
-  pretrained: "../Datasets/pretrained/simclr_cifar_10.pth.tar"
+  pretrained: "./pretrained/simclr_cifar_10.pth.tar"
   backbone:
     name: "resnet18"
-    is_freeze: True
 
   fixmatch_threshold: 0.95
 
