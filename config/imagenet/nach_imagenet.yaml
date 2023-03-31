@@ -42,7 +42,7 @@ dataloader:
     num_workers: 8  # per-process
   valid:
     batch_size: 100  # per-GPU
-    num_workers: 1 # per-process
+    num_workers: 4 # per-process
 
 # ---------------------------------------------------------------- #
 optimizer:
@@ -58,7 +58,7 @@ scheduler:
 trainer:
   fp16: true
   max_epochs: 90
-  print_interval_iters: 5
+  print_interval_iters: 20
   valid_interval_epochs: 1
   clip_grad: 100.0
   num_accum: 1

@@ -57,7 +57,7 @@ scheduler:
 trainer:
   fp16: true
   max_epochs: 200
-  print_interval_iters: 5
+  print_interval_iters: 20
   valid_interval_epochs: 1
   clip_grad: 100.0
   num_accum: 1

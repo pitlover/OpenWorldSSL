@@ -6,7 +6,7 @@ from torch.optim import SGD, Adam, AdamW
 from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR, ConstantLR
 from torch.cuda.amp import GradScaler
 
-from data.dataset import OpenWorldDataset
+from data.dataset import OpenWorldDataset, ConcatDataset, TwoStreamBatchSampler
 from utils.dist_utils import is_distributed_set
 
 from model.nach import NACH
@@ -28,30 +28,62 @@ def build_model(cfg: Dict) -> nn.Module:
     return model
 
 
-def build_dataset(data_dir: str, is_train: bool, is_label: bool, seed: int, cfg: Dict,
-                  unlabeled_idxs: List = None) -> OpenWorldDataset:
-    # cfg = cfg["dataset"]
-    dataset = OpenWorldDataset(
+def build_dataset(data_dir: str, seed: int, cfg: Dict) -> OpenWorldDataset:
+    # # cfg = cfg["dataset"]
+
+    train_label_dataset = OpenWorldDataset(
         dataset_name=cfg["name"].lower(),
         label_num=cfg["label_num"],
         label_ratio=cfg["label_ratio"],
         data_dir=data_dir,
-        is_train=is_train,
-        is_label=is_label,
-        unlabeled_idxs=unlabeled_idxs
+        is_train=True,
+        is_label=True,
+        unlabeled_idxs=None
     )
 
-    return dataset
+    train_unlabel_dataset = OpenWorldDataset(
+        dataset_name=cfg["name"].lower(),
+        label_num=cfg["label_num"],
+        label_ratio=cfg["label_ratio"],
+        data_dir=data_dir,
+        is_train=True,
+        is_label=False,
+        unlabeled_idxs=train_label_dataset.unlabeled_idxs
+    )
+
+    train_dataset = ConcatDataset((train_label_dataset, train_unlabel_dataset))
+
+    # Following previous works, we test unlabeled dataset in 'trainset'
+    valid_dataset = OpenWorldDataset(
+        dataset_name=cfg["name"].lower(),
+        label_num=cfg["label_num"],
+        label_ratio=cfg["label_ratio"],
+        data_dir=data_dir,
+        is_train=False,
+        is_label=False,
+        unlabeled_idxs=train_label_dataset.unlabeled_idxs
+    )
+
+    return train_dataset, valid_dataset, len(train_label_dataset), len(train_unlabel_dataset)
 
 
-def build_dataloader(dataset: OpenWorldDataset, batch_size: int, is_train: bool, cfg: Dict) -> DataLoader:
+def build_dataloader(dataset: OpenWorldDataset, batch_size: int,
+                     is_train: bool, cfg: Dict,
+                     labeled_len: int = 1,
+                     unlabeled_len: int = 1,
+                     labeled_batch_size: int = 1,
+                     ) -> DataLoader:
     if is_train:
         if is_distributed_set():
-            sampler = DistributedSampler(dataset, shuffle=True, seed=0, drop_last=True)
-            shuffle, drop_last = False, False
+            sampler = TwoStreamBatchSampler(range(labeled_len), range(labeled_len, labeled_len + unlabeled_len),
+                                            batch_size, labeled_batch_size)
+            # sampler = DistributedSampler(dataset, shuffle=True, seed=0, drop_last=True)
+            shuffle, drop_last = False, True
         else:
             sampler = None
             shuffle, drop_last = True, True
+        kwargs = dict(batch_sampler=sampler, num_workers=cfg.get("num_workers", 1))
+
     else:
         if is_distributed_set():
             sampler = DistributedSampler(dataset, shuffle=False, seed=0, drop_last=False)
@@ -60,19 +92,19 @@ def build_dataloader(dataset: OpenWorldDataset, batch_size: int, is_train: bool,
             sampler = None
             shuffle, drop_last = False, False
 
-    # When using DistributedSampler, don't forget to call dataloader.sampler.set_epoch(epoch)
+        kwargs = dict(
+            batch_size=batch_size if not is_train else 1,  # per-process (=per-GPU)
+            shuffle=shuffle,
+            sampler=sampler,
+            num_workers=cfg.get("num_workers", 1),  # per-process
+            # collate_fn=ImageNet.fast_collate_imagenet,
+            pin_memory=True,
+            drop_last=drop_last,
+            prefetch_factor=2,
+        )
 
-    kwargs = dict(
-        batch_size=batch_size,  # per-process (=per-GPU)
-        shuffle=shuffle,
-        sampler=sampler,
-        num_workers=cfg.get("num_workers", 1),  # per-process
-        # collate_fn=ImageNet.fast_collate_imagenet,
-        pin_memory=True,
-        drop_last=drop_last,
-        prefetch_factor=2,
-    )
     dataloader = DataLoader(dataset, **kwargs)
+
     return dataloader
 
 

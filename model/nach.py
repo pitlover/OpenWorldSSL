@@ -51,7 +51,7 @@ class NACH(nn.Module):
         b, c, h, w, = img.shape
         results = {}
 
-        output, feat = self.backbone(img)  # fc, flatten (b, num_classes), (b, 512)
+        output, feat = self.backbone(img)  # fc, flatten, shape : (b, num_classes), (b, 512)
 
         if not self.training:
             return F.softmax(output, dim=1), None, None, None

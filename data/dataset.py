@@ -1,15 +1,19 @@
+import itertools
 from typing import List, Tuple
 from os.path import join
 import numpy as np
 import pickle
 import torchvision.transforms as tv
 import accimage
+import bisect
+import warnings
 
 from torchvision import get_image_backend
 from torchvision.datasets import CIFAR10, CIFAR100
 from data.randaugment import RandAugmentMC
 from torch.utils.data import Dataset
 from PIL import Image
+from torch.utils.data.sampler import Sampler
 
 
 class Transform:
@@ -86,7 +90,6 @@ class Transform:
         return out1, out2, out_aug_weak, out_aug_strong
 
 
-
 def OpenWorldDataset(dataset_name: str,
                      label_num: int,
                      label_ratio: float,
@@ -128,29 +131,6 @@ def OpenWorldDataset(dataset_name: str,
     return dataset_class
 
 
-def pil_loader(path):
-    # open path as file to avoid ResourceWarning (https://github.com/python-pillow/Pillow/issues/835)
-    with open(path, 'rb') as f:
-        img = Image.open(f)
-        return img.convert('RGB')
-
-
-def accimage_loader(path):
-    try:
-        return accimage.Image(path)
-    except IOError:
-        # Potentially a decoding problem, fall back to PIL.Image
-        return pil_loader(path)
-
-
-def get_loader(path):
-    from torchvision import get_image_backend
-    if get_image_backend() == 'accimage':
-        return accimage_loader(path)
-    else:
-        return pil_loader(path)
-
-
 class Imagenet(Dataset):
     def __init__(self, data_dir: str, anno_file: str, transform=None, target_transform=None):
         # super().__init__()
@@ -158,10 +138,30 @@ class Imagenet(Dataset):
         self.anno_file = join(self.data_dir, anno_file)
         self.transform = transform
         self.target_transform = target_transform
-        self.loader = get_loader
+        self.loader = self._get_loader
 
         self._read_file()
         self.unlabeled_idxs = None  # Just for unity with cifar
+
+    def _pil_loader(self, path):
+        # open path as file to avoid ResourceWarning (https://github.com/python-pillow/Pillow/issues/835)
+        with open(path, 'rb') as f:
+            img = Image.open(f)
+            return img.convert('RGB')
+
+    def _accimage_loader(self, path):
+        try:
+            return self._accimage.Image(path)
+        except IOError:
+            # Potentially a decoding problem, fall back to PIL.Image
+            return self._pil_loader(path)
+
+    def _get_loader(self, path):
+        from torchvision import get_image_backend
+        if get_image_backend() == 'accimage':
+            return self._accimage_loader(path)
+        else:
+            return self._pil_loader(path)
 
     def _read_file(self):
         filenames, targets = [], []
@@ -308,3 +308,101 @@ class Cifar10(CIFAR10):
         targets = np.array(self.targets)
         self.targets = targets[idxs].tolist()
         self.data = self.data[idxs, ...]
+
+
+class ConcatDataset(Dataset):
+    """
+    Original code is from orca.
+    Dataset to concatenate multiple datasets.
+    Purpose: useful to assemble different existing datasets, possibly
+    large-scale datasets as the concatenation operation is done in an
+    on-the-fly manner.
+    Arguments:
+        datasets (sequence): List of datasets to be concatenated
+    """
+
+    @staticmethod
+    def cumsum(sequence):
+        r, s = [], 0
+        for e in sequence:
+            l = len(e)
+            r.append(l + s)
+            s += l
+        return r
+
+    def __init__(self, datasets):
+        super(ConcatDataset, self).__init__()
+        assert len(datasets) > 0, 'datasets should not be an empty iterable'
+        self.datasets = list(datasets)
+        self.cumulative_sizes = self.cumsum(self.datasets)
+
+    def __len__(self):
+        return self.cumulative_sizes[-1]
+
+    def __getitem__(self, idx):
+        if idx < 0:
+            if -idx > len(self):
+                raise ValueError("absolute value of index should not exceed dataset length")
+            idx = len(self) + idx
+        dataset_idx = bisect.bisect_right(self.cumulative_sizes, idx)
+        if dataset_idx == 0:
+            sample_idx = idx
+        else:
+            sample_idx = idx - self.cumulative_sizes[dataset_idx - 1]
+
+        return self.datasets[dataset_idx][sample_idx]
+
+    @property
+    def cummulative_sizes(self):
+        warnings.warn("cummulative_sizes attribute is renamed to "
+                      "cumulative_sizes", DeprecationWarning, stacklevel=2)
+        return self.cumulative_sizes
+
+
+def iterate_once(iterable):
+    return np.random.permutation(iterable)
+
+
+def iterate_eternally(indices):
+    def infinite_shuffles():
+        while True:
+            yield np.random.permutation(indices)
+
+    return itertools.chain.from_iterable(infinite_shuffles())
+
+
+def grouper(iterable, n):
+    "Collect data into fixed-length chunks or blocks"
+    # grouper('ABCDEFG', 3) --> ABC DEF"
+    args = [iter(iterable)] * n
+    return zip(*args)
+
+
+class TwoStreamBatchSampler(Sampler):
+    """Iterate two sets of indices
+    An 'epoch' is one iteration through the primary indices.
+    During the epoch, the secondary indices are iterated through
+    as many times as needed.
+    """
+
+    def __init__(self, primary_indices, secondary_indices, batch_size, primary_batch_size):
+        self.primary_indices = primary_indices
+        self.secondary_indices = secondary_indices
+        self.primary_batch_size = primary_batch_size
+        self.secondary_batch_size = batch_size - primary_batch_size
+
+        assert len(self.primary_indices) >= self.primary_batch_size > 0
+        assert len(self.secondary_indices) >= self.secondary_batch_size > 0
+
+    def __iter__(self):
+        primary_iter = iterate_once(self.primary_indices)
+        secondary_iter = iterate_eternally(self.secondary_indices)
+        return (
+            primary_batch + secondary_batch
+            for (primary_batch, secondary_batch)
+            in zip(grouper(primary_iter, self.primary_batch_size),
+                   grouper(secondary_iter, self.secondary_batch_size))
+        )
+
+    def __len__(self):
+        return len(self.primary_indices) // self.primary_batch_size
