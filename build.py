@@ -77,7 +77,6 @@ def build_dataloader(dataset: OpenWorldDataset, batch_size: int,
         if is_distributed_set():
             sampler = TwoStreamBatchSampler(range(labeled_len), range(labeled_len, labeled_len + unlabeled_len),
                                             batch_size, labeled_batch_size)
-            # sampler = DistributedSampler(dataset, shuffle=True, seed=0, drop_last=True)
             shuffle, drop_last = False, True
         else:
             sampler = None
@@ -93,7 +92,7 @@ def build_dataloader(dataset: OpenWorldDataset, batch_size: int,
             shuffle, drop_last = False, False
 
         kwargs = dict(
-            batch_size=batch_size if not is_train else 1,  # per-process (=per-GPU)
+            batch_size=batch_size,  # per-process (=per-GPU)
             shuffle=shuffle,
             sampler=sampler,
             num_workers=cfg.get("num_workers", 1),  # per-process

@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from scipy.optimize import linear_sum_assignment
 from sklearn import metrics
 

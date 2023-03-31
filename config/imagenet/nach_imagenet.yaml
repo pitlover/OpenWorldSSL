@@ -39,7 +39,7 @@ loss:
 dataloader:
   train:
     batch_size: 512  # per-GPU  (approx. 10GB)
-    num_workers: 8  # per-process
+    num_workers: 4  # per-process
   valid:
     batch_size: 100  # per-GPU
     num_workers: 4 # per-process

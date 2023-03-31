@@ -58,7 +58,7 @@ def train_epoch(
         s += f"Current iter: {current_iter} (epoch done: {it / len(train_loader) * 100:.2f} %)\n"
 
         # -------------------------------- data -------------------------------- #
-        # data : img, label, idx
+        # data : img, label
         # img (label+unlabel) : img1, img2, aug_weak, aug_strong
         (img1, img2, aug_weak, aug_strong), all_label = data  # all_label 이 이상한데?
         label = all_label[:labeled_len]
@@ -164,6 +164,7 @@ def valid_epoch(
     torch.set_grad_enabled(False)  # same as 'with torch.no_grad():'
 
     targets, preds = np.array([]), np.array([])
+
     output = {}
     for it, data in enumerate(dataloader):
         # -------------------------------- data -------------------------------- #
@@ -316,7 +317,7 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
         if eval:
             print("Best Eval Finish...")
             return
-            # -------- main loop -------- #
+    # -------- main loop -------- #
     while current_epoch < max_epochs:
         if is_master():
             s = time_log()
