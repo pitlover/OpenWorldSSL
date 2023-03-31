@@ -1,5 +1,6 @@
 from torchvision.datasets.cifar import CIFAR10, CIFAR100
 
+# Download cifar10, 100
 print("Download Cifar10")
 CIFAR10(root="./", train=True, download=True)
 CIFAR10(root="./", train=False, download=True)

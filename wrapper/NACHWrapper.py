@@ -66,7 +66,7 @@ class NACHWrapper(nn.Module):
 
         results["mean-uncertainty"] = self.mean_uncertainty
 
-        model_loss = -1 * results["entropy-loss"] + results["bse-loss"] + \
+        model_loss = -1 * results["entropy-loss"] + results["bce-loss"] + \
                      results["cross-entropy-loss"] + results["fixmatch-loss"]
         results["loss"] = model_loss
 

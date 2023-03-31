@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-from model.resnet_s import build_resnet
+from model.resnet import build_resnet
 from model.functions import freeze_layers
 from model.others.loss import Entropy, Fixmatch
 

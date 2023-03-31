@@ -9,6 +9,7 @@ def freeze_layers(model, model_name):
     for name, param in model.named_parameters():
         if fc not in name and 'layer4' not in name:
             param.requires_grad = False
+
     return model
 
 

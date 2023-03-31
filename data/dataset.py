@@ -1,19 +1,24 @@
-from typing import List
+from typing import List, Tuple
 from os.path import join
 import numpy as np
 import pickle
 import torchvision.transforms as tv
+import accimage
+
+from torchvision import get_image_backend
 from torchvision.datasets import CIFAR10, CIFAR100
 from data.randaugment import RandAugmentMC
 from torch.utils.data import Dataset
+from PIL import Image
 
 
 class Transform:
     def __init__(self, dataset_name: str, is_train: bool):
         if "cifar" in dataset_name:
+            res = 32
             dict_transform = {
                 'train': tv.Compose([
-                    tv.RandomCrop(32, padding=4),
+                    tv.RandomCrop(res, padding=4),
                     tv.RandomHorizontalFlip(),
                     tv.ToTensor(),
                     tv.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
@@ -24,16 +29,17 @@ class Transform:
                 ])
             }
         elif "imagenet" in dataset_name:
+            res = 224
             dict_transform = {
                 "train": tv.Compose([
-                    tv.RandomResizedCrop(224, scale=(0.5, 1.0)),
+                    tv.RandomResizedCrop(res, scale=(0.5, 1.0)),
                     tv.RandomHorizontalFlip(),
                     tv.ToTensor(),
                     tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ]),
                 "test": tv.Compose([
                     tv.Resize(256),
-                    tv.CenterCrop(224),
+                    tv.CenterCrop(res),
                     tv.ToTensor(),
                     tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ])
@@ -42,7 +48,7 @@ class Transform:
         self.transform = dict_transform['train'] if is_train else dict_transform['test']
 
         self.simclr = tv.Compose([
-            tv.RandomResizedCrop(size=32, scale=(0.2, 1.)),
+            tv.RandomResizedCrop(size=res, scale=(0.2, 1.)),
             tv.RandomHorizontalFlip(),
             tv.RandomApply([
                 tv.ColorJitter(0.4, 0.4, 0.4, 0.1)
@@ -54,18 +60,20 @@ class Transform:
 
         self.fixmatch_weak = tv.Compose([
             tv.RandomHorizontalFlip(),
-            tv.RandomCrop(size=32,
-                          padding=int(32 * 0.125),
-                          padding_mode='reflect'),
+            tv.RandomResizedCrop(res, scale=(0.5, 1.0)),
+            # tv.RandomCrop(size=res,
+            #               padding=int(res * 0.125),
+            #               padding_mode='reflect'),
             tv.ToTensor(),
             tv.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
         ])
 
         self.fixmatch_strong = tv.Compose([
             tv.RandomHorizontalFlip(),
-            tv.RandomCrop(size=32,
-                          padding=int(32 * 0.125),
-                          padding_mode='reflect'),
+            tv.RandomResizedCrop(res, scale=(0.5, 1.0)),
+            # tv.RandomCrop(size=res,
+            #               padding=int(res * 0.125),
+            #               padding_mode='reflect'),
             RandAugmentMC(n=2, m=10),
             tv.ToTensor(),
             tv.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
@@ -73,9 +81,10 @@ class Transform:
 
     def __call__(self, inp):
         out1, out2 = self.transform(inp), self.transform(inp)
-        out_weak, out_aug = self.fixmatch_weak(inp), self.fixmatch_strong(inp)
+        out_aug_weak, out_aug_strong = self.fixmatch_weak(inp), self.fixmatch_strong(inp)
 
-        return out1, out2, out_weak, out_aug
+        return out1, out2, out_aug_weak, out_aug_strong
+
 
 
 def OpenWorldDataset(dataset_name: str,
@@ -84,8 +93,8 @@ def OpenWorldDataset(dataset_name: str,
                      data_dir: str,
                      is_train: bool,
                      is_label: bool,
-                     seed: int,
-                     unlabeled_idxs: None,
+                     seed: int = 0,
+                     unlabeled_idxs: List = None,
                      ):
     extra_args = dict(label_num=label_num, label_ratio=label_ratio, seed=seed)
 
@@ -106,9 +115,10 @@ def OpenWorldDataset(dataset_name: str,
             **extra_args
         )
     elif dataset_name == "imagenet":
+        label = "label" if is_label else "unlabel"
         dataset_class = Imagenet(
             data_dir=data_dir,
-            anno_file='./imagenet/ImageNet100_label_{}_{:.2f}.txt'.format(label_num, label_ratio),
+            anno_file='ImageNet100_{}_{}_{:.2f}.txt'.format(label, label_num, label_ratio),
             transform=Transform(dataset_name=dataset_name, is_train=is_train)
         )
 
@@ -118,19 +128,42 @@ def OpenWorldDataset(dataset_name: str,
     return dataset_class
 
 
-class Imagenet(Dataset):
-    def __init__(self, data_dir: str, anno_file: str, loader, transform=None, target_transform=None):
-        super().__init__()
+def pil_loader(path):
+    # open path as file to avoid ResourceWarning (https://github.com/python-pillow/Pillow/issues/835)
+    with open(path, 'rb') as f:
+        img = Image.open(f)
+        return img.convert('RGB')
 
-        self.data_dir = data_dir
-        self.anno_file = join(data_dir, anno_file)
-        self.loader = loader
+
+def accimage_loader(path):
+    try:
+        return accimage.Image(path)
+    except IOError:
+        # Potentially a decoding problem, fall back to PIL.Image
+        return pil_loader(path)
+
+
+def get_loader(path):
+    from torchvision import get_image_backend
+    if get_image_backend() == 'accimage':
+        return accimage_loader(path)
+    else:
+        return pil_loader(path)
+
+
+class Imagenet(Dataset):
+    def __init__(self, data_dir: str, anno_file: str, transform=None, target_transform=None):
+        # super().__init__()
+        self.data_dir = join(data_dir, "imagenet")
+        self.anno_file = join(self.data_dir, anno_file)
         self.transform = transform
         self.target_transform = target_transform
+        self.loader = get_loader
 
-        self.read_file()
+        self._read_file()
+        self.unlabeled_idxs = None  # Just for unity with cifar
 
-    def read_file(self):
+    def _read_file(self):
         filenames, targets = [], []
 
         with open(self.anno_file, "r") as f:
@@ -143,20 +176,20 @@ class Imagenet(Dataset):
         self.targets = targets
 
     def __len__(self):
-        return len(self.samples)
+        return len(self.targets)
 
-    def __getitem__(self, index):
+    def __getitem__(self, index) -> Tuple:
         path = join(self.data_dir, self.samples[index])
         target = self.targets[index]
         sample = self.loader(path)
 
         if self.transform is not None:
-            sample = self.transform(sample)
+            out1, out2, out_weak, out_aug = self.transform(sample)
 
         if self.target_transform is not None:
             target = self.target_transform(target)
 
-        return sample, target, index
+        return (out1, out2, out_weak, out_aug), target
 
 
 class Cifar100(CIFAR100):

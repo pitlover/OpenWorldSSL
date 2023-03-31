@@ -38,7 +38,6 @@ def build_dataset(data_dir: str, is_train: bool, is_label: bool, seed: int, cfg:
         data_dir=data_dir,
         is_train=is_train,
         is_label=is_label,
-        seed=seed,
         unlabeled_idxs=unlabeled_idxs
     )
 

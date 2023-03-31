@@ -72,82 +72,90 @@ def train_epoch(
                                                   aug_weak.to(device, non_blocking=True), \
                                                   aug_strong.to(device, non_blocking=True), \
                                                   label.to(device, non_blocking=True)
+
+        # uimg1, uimg2, uaug_weak, uaug_strong, label = uimg1.to(device, non_blocking=True), \
+        #                                               uimg2.to(device, non_blocking=True), \
+        #                                               uaug_weak.to(device, non_blocking=True), \
+        #                                               uaug_strong.to(device, non_blocking=True), \
+        #                                               ulabel.to(device, non_blocking=True)
+
         data_time = time.time() - data_start_time
-
-        # -------------------------------- loss -------------------------------- #
-        if it % num_accum == 0:
-            optimizer.zero_grad(set_to_none=True)
-
-        if it % num_accum == (num_accum - 1):  # update step
-            forward_start_time = time.time()
-            with amp.autocast(enabled=fp16):
-                _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
-                                  aug_strong=aug_strong, iter=it, max_iter=len(label_dataloader))  # {"loss", "acc1"}
-            forward_time = time.time() - forward_start_time
-
-            backward_start_time = time.time()
-            loss = output["loss"]
-            loss = loss / num_accum
-            scaler.scale(loss).backward()
-            backward_time = time.time() - backward_start_time
-
-            step_start_time = time.time()
-            scaler.unscale_(optimizer)
-            grad_norm = clip_grad_norm_(model.parameters(), max_norm=clip_grad)
-            scaler.step(optimizer)
-            scaler.update()
-            # scheduler.step()
-            step_time = time.time() - step_start_time
-
-        elif isinstance(model, DistributedDataParallel):  # non-update step and DDP
-            with model.no_sync():
-                with amp.autocast(enabled=fp16):
-                    _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
-                                      aug_strong=aug_strong,
-                                      iter=it, max_iter=len(label_dataloader))  # {"loss", "acc1"}
-
-                loss = output["loss"]
-                loss = loss / num_accum
-                scaler.scale(loss).backward()
-
-        else:  # non-update step and not DDP
-            with amp.autocast(enabled=fp16):
-                _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
-                                  aug_strong=aug_strong, iter=it, max_iter=len(label_dataloader))  # {"loss", "acc1"}
-
-            loss = output["loss"]
-            loss = loss / num_accum
-            scaler.scale(loss).backward()
-
-        # -------------------------------- print -------------------------------- #
-
-        if (it > 0) and (it % print_interval == 0):
-            output = all_reduce_dict(output, op="mean")
-            param_norm = compute_param_norm(model.parameters())
-            lr = scheduler.get_last_lr()[0]
-
-            for k, v in output.items():
-                s += f"... {k}: {v.item() if isinstance(v, torch.Tensor) else v:.6f}\n"
-            s += f"... LR: {lr:.6f}\n"
-            s += f"... grad/param norm: {grad_norm.item():.3f} / {param_norm.item():.3f}\n"
-            s += f"... batch_size x num_accum x gpus = " \
-                 f"{int(label.shape[0])} x {num_accum} x {get_world_size()}\n"
-            s += f"... data/fwd/bwd/step time: " \
-                 f"{data_time:.3f} / {forward_time:.3f} / {backward_time:.3f} / {step_time:.3f}"
-
-            if is_master():
-                print(s)
-                log_dict = {
-                    "grad_norm": grad_norm.item(),
-                    "param_norm": param_norm.item(),
-                    "lr": lr,
-                    "iterations": current_iter,
-                }
-                for k, v in output.items():
-                    log_dict[k] = v.item() if isinstance(v, torch.Tensor) else v
-                wandb.log(log_dict)
-
-        current_iter += 1
+        print(data_time)
+        #
+        # # -------------------------------- loss -------------------------------- #
+        # if it % num_accum == 0:
+        #     optimizer.zero_grad(set_to_none=True)
+        #
+        # if it % num_accum == (num_accum - 1):  # update step
+        #     forward_start_time = time.time()
+        #     with amp.autocast(enabled=fp16):
+        #         _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
+        #                           aug_strong=aug_strong, iter=it, max_iter=len(label_dataloader))  # {"loss", "acc1"}
+        #     forward_time = time.time() - forward_start_time
+        #
+        #     backward_start_time = time.time()
+        #     loss = output["loss"]
+        #     loss = loss / num_accum
+        #     scaler.scale(loss).backward()
+        #     backward_time = time.time() - backward_start_time
+        #
+        #     step_start_time = time.time()
+        #     scaler.unscale_(optimizer)
+        #     grad_norm = clip_grad_norm_(model.parameters(), max_norm=clip_grad)
+        #     scaler.step(optimizer)
+        #     scaler.update()
+        #     # scheduler.step()
+        #     step_time = time.time() - step_start_time
+        #
+        # elif isinstance(model, DistributedDataParallel):  # non-update step and DDP
+        #     with model.no_sync():
+        #         with amp.autocast(enabled=fp16):
+        #             _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
+        #                               aug_strong=aug_strong,
+        #                               iter=it, max_iter=len(label_dataloader))  # {"loss", "acc1"}
+        #
+        #         loss = output["loss"]
+        #         loss = loss / num_accum
+        #         scaler.scale(loss).backward()
+        #
+        # else:  # non-update step and not DDP
+        #     with amp.autocast(enabled=fp16):
+        #         _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
+        #                           aug_strong=aug_strong, iter=it, max_iter=len(label_dataloader))  # {"loss", "acc1"}
+        #
+        #     loss = output["loss"]
+        #     loss = loss / num_accum
+        #     scaler.scale(loss).backward()
+        #
+        # # -------------------------------- print -------------------------------- #
+        #
+        # if (it > 0) and (it % print_interval == 0):
+        #     output = all_reduce_dict(output, op="mean")
+        #     param_norm = compute_param_norm(model.parameters())
+        #     lr = scheduler.get_last_lr()[0]
+        #
+        #     for k, v in output.items():
+        #         s += f"... {k}: {v.item() if isinstance(v, torch.Tensor) else v:.6f}\n"
+        #     s += f"... LR: {lr:.6f}\n"
+        #     s += f"... grad/param norm: {grad_norm.item():.3f} / {param_norm.item():.3f}\n"
+        #     s += f"... batch_size x num_accum x gpus = " \
+        #          f"{int(img1.shape[0])} x {num_accum} x {get_world_size()}\n"
+        #     s += f"... data/fwd/bwd/step time: " \
+        #          f"{data_time:.3f} / {forward_time:.3f} / {backward_time:.3f} / {step_time:.3f}"
+        #
+        #     if is_master():
+        #         print(s)
+        #         log_dict = {
+        #             "grad_norm": grad_norm.item(),
+        #             "param_norm": param_norm.item(),
+        #             "lr": lr,
+        #             "iterations": current_iter,
+        #         }
+        #         for k, v in output.items():
+        #             log_dict[k] = v.item() if isinstance(v, torch.Tensor) else v
+        #         wandb.log(log_dict)
+        #
+        # current_iter += 1
         data_start_time = time.time()
 
     return current_iter
@@ -185,6 +193,7 @@ def valid_epoch(
     targets, preds = targets.astype(int), preds.astype(int)
 
     seen_acc, unseen_acc, all_acc, unseen_nmi = OpenSSLMetric(targets, preds, labeled_num=num_seen)
+    del targets, pred
 
     output["all_acc"] = all_acc
     output["unseen_acc"] = unseen_acc
@@ -224,8 +233,10 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
                                         cfg=cfg["dataset"])
     train_unlabel_dataset = build_dataset(data_dir, is_train=True, is_label=False, seed=cfg["seed"],
                                           cfg=cfg["dataset"], unlabeled_idxs=train_label_dataset.unlabeled_idxs)
-
+    # TODO imagenet
+    train_set =
     labeled_len, unlabeled_len = len(train_label_dataset), len(train_unlabel_dataset)
+
     labeled_batch_size = int(cfg["dataloader"]["train"]["batch_size"] * (labeled_len / (labeled_len + unlabeled_len)))
     train_label_dataloader = build_dataloader(train_label_dataset, batch_size=labeled_batch_size, is_train=True,
                                               cfg=cfg["dataloader"]["train"])
