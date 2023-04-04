@@ -32,8 +32,8 @@ def train_epoch(
         optimizer,
         scheduler,
         scaler,
-        train_loader,
-        labeled_len,
+        label_dataloader,
+        unlabel_dataloader,
         cfg: Dict,
         device: torch.device,
         current_iter: int
@@ -51,24 +51,27 @@ def train_epoch(
     backward_time = 0.0
     step_time = 0.0
 
+    unlabel_dataloader_iter = cycle(unlabel_dataloader)
     data_start_time = time.time()
 
-    for it, data in enumerate(train_loader):
+    for it, label_data in enumerate(label_dataloader):
         s = time_log()
-        s += f"Current iter: {current_iter} (epoch done: {it / len(train_loader) * 100:.2f} %)\n"
+        s += f"Current iter: {current_iter} (epoch done: {it / len(label_dataloader) * 100:.2f} %)\n"
 
         # -------------------------------- data -------------------------------- #
-        # data : img, label
-        # img (label+unlabel) : img1, img2, aug_weak, aug_strong
-        (img1, img2, aug_weak, aug_strong), all_label = data  # all_label 이 이상한데?
-        label = all_label[:labeled_len]
+        (img1, img2, aug_weak, aug_strong), label = label_data
+        (uimg1, uimg2, uaug_weak, uaug_strong), ulabel = next(unlabel_dataloader_iter)
+
+        img1 = torch.cat([img1, uimg1], 0)
+        img2 = torch.cat([img2, uimg2], 0)
+        aug_weak = torch.cat([aug_weak, uaug_weak], 0)
+        aug_strong = torch.cat([aug_strong, uaug_strong], 0)
 
         img1, img2, aug_weak, aug_strong, label = img1.to(device, non_blocking=True), \
                                                   img2.to(device, non_blocking=True), \
                                                   aug_weak.to(device, non_blocking=True), \
                                                   aug_strong.to(device, non_blocking=True), \
                                                   label.to(device, non_blocking=True)
-
         data_time = time.time() - data_start_time
 
         # -------------------------------- loss -------------------------------- #
@@ -79,7 +82,7 @@ def train_epoch(
             forward_start_time = time.time()
             with amp.autocast(enabled=fp16):
                 _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
-                                  aug_strong=aug_strong, iter=it, max_iter=len(train_loader))  # {"loss", "acc1"}
+                                  aug_strong=aug_strong, iter=it, max_iter=len(label_dataloader))  # {"loss", "acc1"}
             forward_time = time.time() - forward_start_time
 
             backward_start_time = time.time()
@@ -101,7 +104,7 @@ def train_epoch(
                 with amp.autocast(enabled=fp16):
                     _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
                                       aug_strong=aug_strong,
-                                      iter=it, max_iter=len(train_loader))  # {"loss", "acc1"}
+                                      iter=it, max_iter=len(label_dataloader))  # {"loss", "acc1"}
 
                 loss = output["loss"]
                 loss = loss / num_accum
@@ -110,7 +113,7 @@ def train_epoch(
         else:  # non-update step and not DDP
             with amp.autocast(enabled=fp16):
                 _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
-                                  aug_strong=aug_strong, iter=it, max_iter=len(train_loader))  # {"loss", "acc1"}
+                                  aug_strong=aug_strong, iter=it, max_iter=len(label_dataloader))  # {"loss", "acc1"}
 
             loss = output["loss"]
             loss = loss / num_accum
@@ -128,7 +131,7 @@ def train_epoch(
             s += f"... LR: {lr:.6f}\n"
             s += f"... grad/param norm: {grad_norm.item():.3f} / {param_norm.item():.3f}\n"
             s += f"... batch_size x num_accum x gpus = " \
-                 f"{int(img1.shape[0])} x {num_accum} x {get_world_size()}\n"
+                 f"{int(label.shape[0])} x {num_accum} x {get_world_size()}\n"
             s += f"... data/fwd/bwd/step time: " \
                  f"{data_time:.3f} / {forward_time:.3f} / {backward_time:.3f} / {step_time:.3f}"
 
@@ -164,7 +167,6 @@ def valid_epoch(
     torch.set_grad_enabled(False)  # same as 'with torch.no_grad():'
 
     targets, preds = np.array([]), np.array([])
-
     output = {}
     for it, data in enumerate(dataloader):
         # -------------------------------- data -------------------------------- #
@@ -183,7 +185,6 @@ def valid_epoch(
     targets, preds = targets.astype(int), preds.astype(int)
 
     seen_acc, unseen_acc, all_acc, unseen_nmi = OpenSSLMetric(targets, preds, labeled_num=num_seen)
-    del targets, pred
 
     output["all_acc"] = all_acc
     output["unseen_acc"] = unseen_acc
@@ -219,17 +220,24 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
     # ======================================================================================== #
     data_dir = cfg["data_dir"]
 
-    train_dataset, valid_dataset, labeled_len, unlabeled_len = build_dataset(data_dir, seed=cfg["seed"],
-                                                                             cfg=cfg["dataset"])
+    train_label_dataset = build_dataset(data_dir, is_train=True, is_label=True, seed=cfg["seed"],
+                                        cfg=cfg["dataset"])
+    train_unlabel_dataset = build_dataset(data_dir, is_train=True, is_label=False, seed=cfg["seed"],
+                                          cfg=cfg["dataset"], unlabeled_idxs=train_label_dataset.unlabeled_idxs)
 
-    labeled_batch_size = int(
-        cfg["dataloader"]["train"]["batch_size"] * (labeled_len / (labeled_len + unlabeled_len)))
+    labeled_len, unlabeled_len = len(train_label_dataset), len(train_unlabel_dataset)
+    labeled_batch_size = int(cfg["dataloader"]["train"]["batch_size"] * (labeled_len / (labeled_len + unlabeled_len)))
+    train_label_dataloader = build_dataloader(train_label_dataset, batch_size=labeled_batch_size, is_train=True,
+                                              cfg=cfg["dataloader"]["train"])
+    train_unlabel_dataloader = build_dataloader(train_unlabel_dataset,
+                                                batch_size=cfg["dataloader"]["train"][
+                                                               "batch_size"] - labeled_batch_size,
+                                                is_train=True, cfg=cfg["dataloader"]["train"])
 
-    train_loader = build_dataloader(train_dataset, batch_size=cfg["dataloader"]["train"]["batch_size"],
-                                    labeled_batch_size=labeled_batch_size,
-                                    is_train=True, cfg=cfg["dataloader"]["train"],
-                                    labeled_len=labeled_len, unlabeled_len=unlabeled_len)
-
+    # Following previous works, we test unlabeled dataset in 'trainset'
+    valid_dataset = build_dataset(data_dir, is_train=False, is_label=False, seed=cfg["seed"],
+                                  cfg=cfg["dataset"],
+                                  unlabeled_idxs=train_label_dataset.unlabeled_idxs)
     valid_dataloader = build_dataloader(valid_dataset, batch_size=cfg["dataloader"]["valid"]["batch_size"],
                                         is_train=False, cfg=cfg["dataloader"]["valid"])
 
@@ -273,7 +281,7 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
     # ======================================================================================== #
     optimizer = build_optimizer(model_m, cfg=cfg["optimizer"])
     scheduler = build_scheduler(optimizer, cfg=cfg["scheduler"],
-                                iter_per_epoch=len(train_loader),
+                                iter_per_epoch=len(train_label_dataset) + len(train_unlabel_dataset),
                                 num_epoch=cfg["trainer"]["max_epochs"],
                                 num_accum=cfg["trainer"].get("num_accum", 1))
     scaler = build_scaler(is_fp16=cfg["trainer"].get("fp16", False))
@@ -317,20 +325,22 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
         if eval:
             print("Best Eval Finish...")
             return
-    # -------- main loop -------- #
+            # -------- main loop -------- #
     while current_epoch < max_epochs:
         if is_master():
             s = time_log()
             s += f"Start train epoch {current_epoch} / {max_epochs} (iter: {current_iter})"
             print(s)
 
-        # if is_distributed_set():
-        #     # reset random seed of sampler, sampler should be DistributedSampler.
-        #     train_loader.sampler.set_epoch(current_epoch)  # noqa
+        if is_distributed_set():
+            # reset random seed of sampler, sampler should be DistributedSampler.
+            train_label_dataloader.sampler.set_epoch(current_epoch)  # noqa
+            train_unlabel_dataloader.sampler.set_epoch(current_epoch)  # noqa
 
         # -------- train body -------- #
         epoch_start_time = time.time()  # second
-        current_iter = train_epoch(model, optimizer, scheduler, scaler, train_loader, labeled_batch_size,
+        current_iter = train_epoch(model, optimizer, scheduler, scaler, train_label_dataloader,
+                                   train_unlabel_dataloader,
                                    train_cfg, device, current_iter)
         epoch_time = time.time() - epoch_start_time
         if is_master():

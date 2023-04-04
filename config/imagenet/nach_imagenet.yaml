@@ -28,7 +28,7 @@ model:
   pretrained: "../Datasets/pretrained/simclr_imagenet_100.pth.tar"
   backbone:
     name: "resnet50"
-    is_freeze: true
+    is_freeze: false
 
   fixmatch_threshold: 0.95
 
@@ -41,13 +41,13 @@ dataloader:
     batch_size: 512  # per-GPU  (approx. 10GB)
     num_workers: 4  # per-process
   valid:
-    batch_size: 100  # per-GPU
+    batch_size: 64  # per-GPU
     num_workers: 4 # per-process
 
 # ---------------------------------------------------------------- #
 optimizer:
   name: "sgd"
-  lr: 1e-1  # 0.001 * batch_size_per_gpu * num_accum * num_gpus
+  lr: 2e-2  # 0.001 * batch_size_per_gpu * num_accum * num_gpus
   momentum: 0.9
   weight_decay: 1.0e-4
 

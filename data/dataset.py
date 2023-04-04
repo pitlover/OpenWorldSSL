@@ -1,28 +1,19 @@
-import itertools
-from typing import List, Tuple
+from typing import List
 from os.path import join
 import numpy as np
 import pickle
 import torchvision.transforms as tv
-import accimage
-import bisect
-import warnings
-
-from torchvision import get_image_backend
 from torchvision.datasets import CIFAR10, CIFAR100
 from data.randaugment import RandAugmentMC
 from torch.utils.data import Dataset
-from PIL import Image
-from torch.utils.data.sampler import Sampler
 
 
 class Transform:
     def __init__(self, dataset_name: str, is_train: bool):
         if "cifar" in dataset_name:
-            res = 32
             dict_transform = {
                 'train': tv.Compose([
-                    tv.RandomCrop(res, padding=4),
+                    tv.RandomCrop(32, padding=4),
                     tv.RandomHorizontalFlip(),
                     tv.ToTensor(),
                     tv.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
@@ -33,17 +24,16 @@ class Transform:
                 ])
             }
         elif "imagenet" in dataset_name:
-            res = 224
             dict_transform = {
                 "train": tv.Compose([
-                    tv.RandomResizedCrop(res, scale=(0.5, 1.0)),
+                    tv.RandomResizedCrop(224, scale=(0.5, 1.0)),
                     tv.RandomHorizontalFlip(),
                     tv.ToTensor(),
                     tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ]),
                 "test": tv.Compose([
                     tv.Resize(256),
-                    tv.CenterCrop(res),
+                    tv.CenterCrop(224),
                     tv.ToTensor(),
                     tv.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ])
@@ -52,7 +42,7 @@ class Transform:
         self.transform = dict_transform['train'] if is_train else dict_transform['test']
 
         self.simclr = tv.Compose([
-            tv.RandomResizedCrop(size=res, scale=(0.2, 1.)),
+            tv.RandomResizedCrop(size=32, scale=(0.2, 1.)),
             tv.RandomHorizontalFlip(),
             tv.RandomApply([
                 tv.ColorJitter(0.4, 0.4, 0.4, 0.1)
@@ -64,20 +54,18 @@ class Transform:
 
         self.fixmatch_weak = tv.Compose([
             tv.RandomHorizontalFlip(),
-            tv.RandomResizedCrop(res, scale=(0.5, 1.0)),
-            # tv.RandomCrop(size=res,
-            #               padding=int(res * 0.125),
-            #               padding_mode='reflect'),
+            tv.RandomCrop(size=32,
+                          padding=int(32 * 0.125),
+                          padding_mode='reflect'),
             tv.ToTensor(),
             tv.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
         ])
 
         self.fixmatch_strong = tv.Compose([
             tv.RandomHorizontalFlip(),
-            tv.RandomResizedCrop(res, scale=(0.5, 1.0)),
-            # tv.RandomCrop(size=res,
-            #               padding=int(res * 0.125),
-            #               padding_mode='reflect'),
+            tv.RandomCrop(size=32,
+                          padding=int(32 * 0.125),
+                          padding_mode='reflect'),
             RandAugmentMC(n=2, m=10),
             tv.ToTensor(),
             tv.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
@@ -85,9 +73,9 @@ class Transform:
 
     def __call__(self, inp):
         out1, out2 = self.transform(inp), self.transform(inp)
-        out_aug_weak, out_aug_strong = self.fixmatch_weak(inp), self.fixmatch_strong(inp)
+        out_weak, out_aug = self.fixmatch_weak(inp), self.fixmatch_strong(inp)
 
-        return out1, out2, out_aug_weak, out_aug_strong
+        return out1, out2, out_weak, out_aug
 
 
 def OpenWorldDataset(dataset_name: str,
@@ -96,8 +84,8 @@ def OpenWorldDataset(dataset_name: str,
                      data_dir: str,
                      is_train: bool,
                      is_label: bool,
-                     seed: int = 0,
-                     unlabeled_idxs: List = None,
+                     seed: int,
+                     unlabeled_idxs: None,
                      ):
     extra_args = dict(label_num=label_num, label_ratio=label_ratio, seed=seed)
 
@@ -118,10 +106,9 @@ def OpenWorldDataset(dataset_name: str,
             **extra_args
         )
     elif dataset_name == "imagenet":
-        label = "label" if is_label else "unlabel"
         dataset_class = Imagenet(
             data_dir=data_dir,
-            anno_file='ImageNet100_{}_{}_{:.2f}.txt'.format(label, label_num, label_ratio),
+            anno_file='./imagenet/ImageNet100_label_{}_{:.2f}.txt'.format(label_num, label_ratio),
             transform=Transform(dataset_name=dataset_name, is_train=is_train)
         )
 
@@ -132,38 +119,18 @@ def OpenWorldDataset(dataset_name: str,
 
 
 class Imagenet(Dataset):
-    def __init__(self, data_dir: str, anno_file: str, transform=None, target_transform=None):
-        # super().__init__()
-        self.data_dir = join(data_dir, "imagenet")
-        self.anno_file = join(self.data_dir, anno_file)
+    def __init__(self, data_dir: str, anno_file: str, loader, transform=None, target_transform=None):
+        super().__init__()
+
+        self.data_dir = data_dir
+        self.anno_file = join(data_dir, anno_file)
+        self.loader = loader
         self.transform = transform
         self.target_transform = target_transform
-        self.loader = self._get_loader
 
-        self._read_file()
-        self.unlabeled_idxs = None  # Just for unity with cifar
+        self.read_file()
 
-    def _pil_loader(self, path):
-        # open path as file to avoid ResourceWarning (https://github.com/python-pillow/Pillow/issues/835)
-        with open(path, 'rb') as f:
-            img = Image.open(f)
-            return img.convert('RGB')
-
-    def _accimage_loader(self, path):
-        try:
-            return self._accimage.Image(path)
-        except IOError:
-            # Potentially a decoding problem, fall back to PIL.Image
-            return self._pil_loader(path)
-
-    def _get_loader(self, path):
-        from torchvision import get_image_backend
-        if get_image_backend() == 'accimage':
-            return self._accimage_loader(path)
-        else:
-            return self._pil_loader(path)
-
-    def _read_file(self):
+    def read_file(self):
         filenames, targets = [], []
 
         with open(self.anno_file, "r") as f:
@@ -176,20 +143,20 @@ class Imagenet(Dataset):
         self.targets = targets
 
     def __len__(self):
-        return len(self.targets)
+        return len(self.samples)
 
-    def __getitem__(self, index) -> Tuple:
+    def __getitem__(self, index):
         path = join(self.data_dir, self.samples[index])
         target = self.targets[index]
         sample = self.loader(path)
 
         if self.transform is not None:
-            out1, out2, out_weak, out_aug = self.transform(sample)
+            sample = self.transform(sample)
 
         if self.target_transform is not None:
             target = self.target_transform(target)
 
-        return (out1, out2, out_weak, out_aug), target
+        return sample, target, index
 
 
 class Cifar100(CIFAR100):
@@ -308,101 +275,3 @@ class Cifar10(CIFAR10):
         targets = np.array(self.targets)
         self.targets = targets[idxs].tolist()
         self.data = self.data[idxs, ...]
-
-
-class ConcatDataset(Dataset):
-    """
-    Original code is from orca.
-    Dataset to concatenate multiple datasets.
-    Purpose: useful to assemble different existing datasets, possibly
-    large-scale datasets as the concatenation operation is done in an
-    on-the-fly manner.
-    Arguments:
-        datasets (sequence): List of datasets to be concatenated
-    """
-
-    @staticmethod
-    def cumsum(sequence):
-        r, s = [], 0
-        for e in sequence:
-            l = len(e)
-            r.append(l + s)
-            s += l
-        return r
-
-    def __init__(self, datasets):
-        super(ConcatDataset, self).__init__()
-        assert len(datasets) > 0, 'datasets should not be an empty iterable'
-        self.datasets = list(datasets)
-        self.cumulative_sizes = self.cumsum(self.datasets)
-
-    def __len__(self):
-        return self.cumulative_sizes[-1]
-
-    def __getitem__(self, idx):
-        if idx < 0:
-            if -idx > len(self):
-                raise ValueError("absolute value of index should not exceed dataset length")
-            idx = len(self) + idx
-        dataset_idx = bisect.bisect_right(self.cumulative_sizes, idx)
-        if dataset_idx == 0:
-            sample_idx = idx
-        else:
-            sample_idx = idx - self.cumulative_sizes[dataset_idx - 1]
-
-        return self.datasets[dataset_idx][sample_idx]
-
-    @property
-    def cummulative_sizes(self):
-        warnings.warn("cummulative_sizes attribute is renamed to "
-                      "cumulative_sizes", DeprecationWarning, stacklevel=2)
-        return self.cumulative_sizes
-
-
-def iterate_once(iterable):
-    return np.random.permutation(iterable)
-
-
-def iterate_eternally(indices):
-    def infinite_shuffles():
-        while True:
-            yield np.random.permutation(indices)
-
-    return itertools.chain.from_iterable(infinite_shuffles())
-
-
-def grouper(iterable, n):
-    "Collect data into fixed-length chunks or blocks"
-    # grouper('ABCDEFG', 3) --> ABC DEF"
-    args = [iter(iterable)] * n
-    return zip(*args)
-
-
-class TwoStreamBatchSampler(Sampler):
-    """Iterate two sets of indices
-    An 'epoch' is one iteration through the primary indices.
-    During the epoch, the secondary indices are iterated through
-    as many times as needed.
-    """
-
-    def __init__(self, primary_indices, secondary_indices, batch_size, primary_batch_size):
-        self.primary_indices = primary_indices
-        self.secondary_indices = secondary_indices
-        self.primary_batch_size = primary_batch_size
-        self.secondary_batch_size = batch_size - primary_batch_size
-
-        assert len(self.primary_indices) >= self.primary_batch_size > 0
-        assert len(self.secondary_indices) >= self.secondary_batch_size > 0
-
-    def __iter__(self):
-        primary_iter = iterate_once(self.primary_indices)
-        secondary_iter = iterate_eternally(self.secondary_indices)
-        return (
-            primary_batch + secondary_batch
-            for (primary_batch, secondary_batch)
-            in zip(grouper(primary_iter, self.primary_batch_size),
-                   grouper(secondary_iter, self.secondary_batch_size))
-        )
-
-    def __len__(self):
-        return len(self.primary_indices) // self.primary_batch_size
