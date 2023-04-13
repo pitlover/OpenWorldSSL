@@ -410,8 +410,7 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
                 if is_master():
                     print(s)
 
-            barrier()
-
+        barrier()
         scheduler.step()
         current_epoch += 1
 
