@@ -1,11 +1,11 @@
-from typing import Dict, Tuple, List, Optional
+from typing import Dict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
 from model.resnet import build_resnet
-from model.functions import freeze_layers
+from model.others.functions import freeze_layers
 from model.others.loss import Entropy, Fixmatch
 
 

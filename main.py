@@ -23,7 +23,6 @@ from itertools import cycle
 from build import (build_dataset, build_dataloader, build_model,
                    build_optimizer, build_scheduler, build_scaler)
 from wrapper.NACHWrapper import NACHWrapper
-from model.functions import AverageMeter
 from model.others.metric import OpenSSLMetric
 
 
@@ -131,7 +130,7 @@ def train_epoch(
             s += f"... LR: {lr:.6f}\n"
             s += f"... grad/param norm: {grad_norm.item():.3f} / {param_norm.item():.3f}\n"
             s += f"... batch_size x num_accum x gpus = " \
-                 f"{int(label.shape[0])} x {num_accum} x {get_world_size()}\n"
+                 f"{int(img1.shape[0])} x {num_accum} x {get_world_size()}\n"
             s += f"... data/fwd/bwd/step time: " \
                  f"{data_time:.3f} / {forward_time:.3f} / {backward_time:.3f} / {step_time:.3f}"
 
@@ -413,7 +412,7 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
         barrier()
         scheduler.step()
         current_epoch += 1
- 
+
 
 if __name__ == '__main__':
     args, config = prepare_config()

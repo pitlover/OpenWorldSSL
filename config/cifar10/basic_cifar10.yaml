@@ -1,0 +1,71 @@
+project: "OpenWorldSSL"
+name: "Basic_dino_bbfreeze_headnonlinear"
+save_dir: "result/${dataset.name}/${name}"
+data_dir: "../Datasets"
+
+# ---------------------------------------------------------------- #
+dataset:
+  name: "cifar10"
+  num_class: 10
+  label_num: 5   # Number of Seen Class
+  label_ratio: 0.5  # Ratio of Lables
+
+# ---------------------------------------------------------------- #
+wandb:
+  mode: "online"
+  notes: null
+  id: null
+  tags_dataset: ${dataset.name}
+  tags_model: ${model.backbone.name}
+
+seed: 12345
+resume:
+  checkpoint: null # Always non-null if eval
+  strict: true
+
+# ---------------------------------------------------------------- #
+model:
+  backbone:
+    name: "dino"
+    is_freeze: true
+    model_type: "vit_base"                    # "vit_base", "vit_small"
+    dino_patch_size: 16
+    freeze_backbone: true
+    dropout: true
+    drop_prob: 0.1
+    n_mlp_layers: 3
+
+    pretrained_weights: null # DINO
+    pretrained: "../Datasets/pretrained/simclr_cifar_10.pth.tar" # Resnet
+
+loss:
+  reg_weight: -1.0
+  sup_weight: 1.0
+
+# ---------------------------------------------------------------- #
+dataloader:
+  train:
+    batch_size: 512  # per-GPU  (approx. 10GB)
+    num_workers: 4  # per-process
+  valid:
+    batch_size: 100  # per-GPU
+    num_workers: 4 # per-process
+
+# ---------------------------------------------------------------- #
+optimizer:
+  name: "sgd"
+  lr: 1e-1  # 0.001 * batch_size_per_gpu * num_accum * num_gpus
+  momentum: 0.9
+  weight_decay: 5.0e-4
+
+scheduler:
+  name: "cos"     # "cos" "custom" "constant"
+
+# ---------------------------------------------------------------- #
+trainer:
+  fp16: true
+  max_epochs: 200
+  print_interval_iters: 20
+  valid_interval_epochs: 1
+  clip_grad: 100.0
+  num_accum: 1

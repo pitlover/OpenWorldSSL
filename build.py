@@ -10,7 +10,9 @@ from data.dataset import OpenWorldDataset
 from utils.dist_utils import is_distributed_set
 
 from model.nach import NACH
+from model.basic import Basic
 from wrapper.NACHWrapper import NACHWrapper
+from wrapper.BasicWrapper import BasicWrapper
 
 
 def build_model(cfg: Dict) -> nn.Module:
@@ -22,6 +24,10 @@ def build_model(cfg: Dict) -> nn.Module:
                             NACH(cfg["model"], cfg["loss"],
                                  num_classes=cfg["dataset"]["num_class"],
                                  num_seen=cfg["dataset"]["label_num"]))
+    elif "basic" in model_name:
+        model = BasicWrapper(cfg, cfg["loss"], Basic(cfg["model"], cfg["loss"],
+                                                     num_classes=cfg["dataset"]["num_class"],
+                                                     num_seen=cfg["dataset"]["label_num"]))
     else:
         raise ValueError(f"Unsupported model type {model_name}.")
 

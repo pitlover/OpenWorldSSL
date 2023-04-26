@@ -1,9 +1,9 @@
-from typing import Dict, Tuple, List
+from typing import Dict
 import torch
 import torch.nn as nn
 
 from model.nach import NACH
-from model.functions import AverageMeter
+from model.others.functions import AverageMeter
 
 __all__ = [
     "NACHWrapper"
