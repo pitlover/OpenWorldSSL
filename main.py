@@ -413,7 +413,7 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
         barrier()
         scheduler.step()
         current_epoch += 1
-
+ 
 
 if __name__ == '__main__':
     args, config = prepare_config()
