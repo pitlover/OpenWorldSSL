@@ -32,7 +32,7 @@ def build_model(cfg: Dict) -> nn.Module:
                                                      num_seen=cfg["dataset"]["label_num"]))
 
     elif "consistency" in model_name:
-        model = ConsistencyWrapper(cfg, cfg["loss"], Consistency(cfg["model"], cfg["loss"],
+        model = ConsistencyWrapper(cfg["model"], cfg["loss"], Consistency(cfg["model"], cfg["loss"],
                                                                  num_classes=cfg["dataset"]["num_class"],
                                                                  num_seen=cfg["dataset"]["label_num"]))
     else:

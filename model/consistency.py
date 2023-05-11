@@ -71,7 +71,7 @@ class Consistency(nn.Module):
         assert feat.shape[-1] == self.embeded_dim
 
         if not self.training:
-            return F.softmax(output, dim=1), None, None, None
+            return F.softmax(output, dim=1), None
 
         logit_aug_weak, feat_aug_weak = self.backbone(aug_weak)
         logit_aug_strong, feat_aug_strong = self.backbone(aug_strong)
@@ -94,21 +94,22 @@ class Consistency(nn.Module):
             _, top1_labeled_aug_strong = F.softmax(logit_aug_strong[:num_label], dim=1).max(1)
 
             # unlabeled data
-            ulabel_seen_mask = ulabel.lu(self.num_seen)
-            ulabel_unseen_mask = ulabel.ge(self.num_seen)
-            _, top1_unlabeled_seen_weak = F.softmax(torch.masked_select(logit_aug_weak[num_label:], ulabel_seen_mask),
+            ulabel_seen_mask = ulabel.lt(self.num_seen)
+            ulabel_unseen_mask = ~ulabel_seen_mask
+            _, top1_unlabeled_seen_weak = F.softmax(logit_aug_weak[num_label:][ulabel_seen_mask],
                                                     dim=1).max(1)
-            _, top1_unlabeled_unseen_weak = F.softmax(
-                torch.masked_select(logit_aug_weak[num_label:], ulabel_unseen_mask), dim=1).max(1)
+            _, top1_unlabeled_unseen_weak = F.softmax(logit_aug_weak[num_label:][ulabel_unseen_mask], dim=1).max(1)
 
-            _, top1_unlabeled_seen_strong = F.softmax(
-                torch.masked_select(logit_aug_strong[num_label:], ulabel_seen_mask),
-                dim=1).max(1)
-            _, top1_unlabeled_unseen_strong = F.softmax(
-                torch.masked_select(logit_aug_strong[num_label:], ulabel_unseen_mask), dim=1).max(1)
+            _, top1_unlabeled_seen_strong = F.softmax(logit_aug_strong[num_label:][ulabel_seen_mask], dim=1).max(1)
+            _, top1_unlabeled_unseen_strong = F.softmax(logit_aug_strong[num_label:][ulabel_unseen_mask], dim=1).max(1)
 
             assert len(top1_unlabeled_seen_strong) == len(ulabel), "Not same size of unlabeled data"
 
-            print("unlabel_unseen", torch.sum(top1_unlabeled_unseen_weak == top1_unlabeled_unseen_strong), len(top1_unlabeled_unseen_weak))
-            print("unlabel_seen", torch.sum(top1_unlabeled_seen_weak == top1_unlabeled_seen_strong), len(top1_unlabeled_seen_weak))
+            print("label", torch.sum(top1_labeled_aug_weak == top1_labeled_aug_strong),
+                  len(top1_labeled_aug_weak))
+
+            print("unlabel_unseen", torch.sum(top1_unlabeled_unseen_weak == top1_unlabeled_unseen_strong),
+                  len(top1_unlabeled_unseen_weak))
+            print("unlabel_seen", torch.sum(top1_unlabeled_seen_weak == top1_unlabeled_seen_strong),
+                  len(top1_unlabeled_seen_weak))
         return prob_out, results
