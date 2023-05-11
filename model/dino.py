@@ -8,7 +8,7 @@ __all__ = ["DinoFeaturizer"]
 
 class DinoFeaturizer(nn.Module):
 
-    def __init__(self, cfg: dict):  # cfg["backbone"]
+    def __init__(self, cfg: dict, is_freeze):  # cfg["backbone"]
         super().__init__()
         self.cfg = cfg
 
@@ -18,9 +18,8 @@ class DinoFeaturizer(nn.Module):
         # self.is_dropout = cfg["dropout"]
         # self.dropout = nn.Dropout2d(p=cfg["drop_prob"])
 
-
         # # -------- Backbone -------- #
-        self.freeze_backbone: bool = cfg.get("freeze_backbone", True)
+        self.freeze_backbone: bool = is_freeze
         self.backbone = vits.__dict__[arch](patch_size=patch_size, num_classes=0)
         self.backbone.requires_grad_(not self.freeze_backbone)
         self.backbone.eval()
@@ -62,7 +61,7 @@ class DinoFeaturizer(nn.Module):
             self.backbone.eval()
         return self
 
-    def forward(self, img: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, img: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """DINO forward
         :param img:     (batch_size, 3, 224, 224)
         :return:        (batch_size, 384, 28, 28)
@@ -73,13 +72,8 @@ class DinoFeaturizer(nn.Module):
         self.backbone.eval()
         if self.freeze_backbone:
             with torch.no_grad():
-                dino_feat, attn, qkv = self.backbone(img, return_qkv=True)  # (b, 768)
+                dino_feat, attn = self.backbone(img)  # (b, 768)
         else:
-            dino_feat, attn, qkv = self.backbone(img, return_qkv=True)  # (b, 768)
+            dino_feat, attn = self.backbone(img)  # (b, 768)
 
-        # dino_feat = dino_feat.unsqueeze(-1)  # .unsqueeze(-1)  # (b, 768, 1)
-        # dino_feat = dino_feat[:, 1:, :].reshape(b, feat_h, feat_w, -1).permute(0, 3, 1,2).contiguous()  # (b, 384, h //ps, w// ps)
-
-        # dino_feat = self.dropout(dino_feat)
-
-        return dino_feat, attn, qkv
+        return dino_feat, attn

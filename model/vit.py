@@ -21,6 +21,19 @@ from functools import partial
 import torch
 import torch.nn as nn
 
+from torch.nn.init import trunc_normal_
+
+
+def drop_path(x, drop_prob: float = 0., training: bool = False):
+    if drop_prob == 0. or not training:
+        return x
+    keep_prob = 1 - drop_prob
+    shape = (x.shape[0],) + (1,) * (x.ndim - 1)  # work with diff dim tensors, not just 2D ConvNets
+    random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+    random_tensor.floor_()  # binarize
+    output = x.div(keep_prob) * random_tensor
+    return output
+
 
 class DropPath(nn.Module):
     """Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
@@ -30,19 +43,8 @@ class DropPath(nn.Module):
         super(DropPath, self).__init__()
         self.drop_prob = drop_prob
 
-    @staticmethod
-    def drop_path(x, drop_prob: float = 0., training: bool = False):
-        if drop_prob == 0. or not training:
-            return x
-        keep_prob = 1 - drop_prob
-        shape = (x.shape[0],) + (1,) * (x.ndim - 1)  # work with diff dim tensors, not just 2D ConvNets
-        random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
-        random_tensor.floor_()  # binarize
-        output = x.div(keep_prob) * random_tensor
-        return output
-
     def forward(self, x):
-        return self.drop_path(x, self.drop_prob, self.training)
+        return drop_path(x, self.drop_prob, self.training)
 
 
 class Mlp(nn.Module):
@@ -88,7 +90,7 @@ class Attention(nn.Module):
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x, attn, qkv
+        return x, attn
 
 
 class Block(nn.Module):
@@ -103,15 +105,15 @@ class Block(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
-    def forward(self, x, return_attention=False, return_qkv=False):
-        y, attn, qkv = self.attn(self.norm1(x))
-        if return_attention:
-            return attn
+    def forward(self, x, return_attention=False):
+        y, attn = self.attn(self.norm1(x))
         x = x + self.drop_path(y)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
-        if return_qkv:
-            return x, attn, qkv
-        return x
+
+        if return_attention:
+            return x, attn
+        else:
+            return x
 
 
 class PatchEmbed(nn.Module):
@@ -128,7 +130,7 @@ class PatchEmbed(nn.Module):
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
 
     def forward(self, x):
-        # B, C, H, W = x.shape
+        B, C, H, W = x.shape
         x = self.proj(x).flatten(2).transpose(1, 2)
         return x
 
@@ -140,7 +142,6 @@ class VisionTransformer(nn.Module):
                  num_heads=12, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop_rate=0., attn_drop_rate=0.,
                  drop_path_rate=0., norm_layer=nn.LayerNorm, **kwargs):
         super().__init__()
-
         self.num_features = self.embed_dim = embed_dim
 
         self.patch_embed = PatchEmbed(
@@ -162,13 +163,13 @@ class VisionTransformer(nn.Module):
         # Classifier head
         self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
-        nn.init.trunc_normal_(self.pos_embed, std=.02)
-        nn.init.trunc_normal_(self.cls_token, std=.02)
+        trunc_normal_(self.pos_embed, std=.02)
+        trunc_normal_(self.cls_token, std=.02)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.trunc_normal_(m.weight, std=.02)
+            trunc_normal_(m.weight, std=.02)
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.LayerNorm):
@@ -210,34 +211,16 @@ class VisionTransformer(nn.Module):
 
         return self.pos_drop(x)
 
-    def forward(self, x, return_qkv: bool = True):
+    def forward(self, x, return_all_patches=False):
         x = self.prepare_tokens(x)
         for blk in self.blocks:
-            x, attn, qkv = blk(x, return_qkv=return_qkv)
+            x, attn = blk(x, return_attention=True)
         x = self.norm(x)
 
-        return x[:, 0], attn, qkv  # cls token
-
-    def forward_feats(self, x):
-        x = self.prepare_tokens(x)
-        for blk in self.blocks:
-            x = blk(x)
-        x = self.norm(x)
-        return x
-
-    def get_intermediate_feat(self, x, n=1):
-        x = self.prepare_tokens(x)
-        # we return the output tokens from the `n` last blocks
-        feat = []
-        attns = []
-        qkvs = []
-        for i, blk in enumerate(self.blocks):
-            x, attn, qkv = blk(x, return_qkv=True)
-            if len(self.blocks) - i <= n:
-                feat.append(self.norm(x))
-                qkvs.append(qkv)
-                attns.append(attn)
-        return feat, attns, qkvs
+        if return_all_patches:
+            return x, attn
+        else:
+            return x[:, 0], attn
 
     def get_last_selfattention(self, x):
         x = self.prepare_tokens(x)
@@ -246,7 +229,9 @@ class VisionTransformer(nn.Module):
                 x = blk(x)
             else:
                 # return attention of the last block
-                return blk(x, return_attention=True)
+                x, attn = blk(x, return_attention=True)
+                x = self.norm(x)
+                return x, attn
 
     def get_intermediate_layers(self, x, n=1):
         x = self.prepare_tokens(x)
@@ -278,3 +263,68 @@ def vit_base(patch_size=16, **kwargs):
         patch_size=patch_size, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4,
         qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     return model
+
+
+class DINOHead(nn.Module):
+    def __init__(self, in_dim, out_dim, use_bn=False, norm_last_layer=True, nlayers=3, hidden_dim=2048,
+                 bottleneck_dim=256):
+        super().__init__()
+        nlayers = max(nlayers, 1)
+        if nlayers == 1:
+            self.mlp = nn.Linear(in_dim, bottleneck_dim)
+        else:
+            layers = [nn.Linear(in_dim, hidden_dim)]
+            if use_bn:
+                layers.append(nn.BatchNorm1d(hidden_dim))
+            layers.append(nn.GELU())
+            for _ in range(nlayers - 2):
+                layers.append(nn.Linear(hidden_dim, hidden_dim))
+                if use_bn:
+                    layers.append(nn.BatchNorm1d(hidden_dim))
+                layers.append(nn.GELU())
+            layers.append(nn.Linear(hidden_dim, bottleneck_dim))
+            self.mlp = nn.Sequential(*layers)
+        self.apply(self._init_weights)
+        self.last_layer = nn.utils.weight_norm(nn.Linear(bottleneck_dim, out_dim, bias=False))
+        self.last_layer.weight_g.data.fill_(1)
+        if norm_last_layer:
+            self.last_layer.weight_g.requires_grad = False
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        x = self.mlp(x)
+        x = nn.functional.normalize(x, dim=-1, p=2)
+        x = self.last_layer(x)
+        return x
+
+
+class VisionTransformerWithLinear(nn.Module):
+
+    def __init__(self, base_vit, num_classes=200):
+
+        super().__init__()
+
+        self.base_vit = base_vit
+        self.fc = nn.Linear(768, num_classes)
+
+    def forward(self, x, return_features=False):
+
+        features = self.base_vit(x)
+        features = torch.nn.functional.normalize(features, dim=-1)
+        logits = self.fc(features)
+
+        if return_features:
+            return logits, features
+        else:
+            return logits
+
+    @torch.no_grad()
+    def normalize_prototypes(self):
+        w = self.fc.weight.data.clone()
+        w = torch.nn.functional.normalize(w, dim=1, p=2)
+        self.fc.weight.copy_(w)

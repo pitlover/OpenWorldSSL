@@ -35,7 +35,8 @@ def train_epoch(
         unlabel_dataloader,
         cfg: Dict,
         device: torch.device,
-        current_iter: int
+        current_iter: int,
+        current_epoch: int
 ) -> int:
     print_interval = cfg["print_interval_iters"]
     fp16 = cfg.get("fp16", False)
@@ -66,11 +67,12 @@ def train_epoch(
         aug_weak = torch.cat([aug_weak, uaug_weak], 0)
         aug_strong = torch.cat([aug_strong, uaug_strong], 0)
 
-        img1, img2, aug_weak, aug_strong, label = img1.to(device, non_blocking=True), \
-                                                  img2.to(device, non_blocking=True), \
-                                                  aug_weak.to(device, non_blocking=True), \
-                                                  aug_strong.to(device, non_blocking=True), \
-                                                  label.to(device, non_blocking=True)
+        img1, img2, aug_weak, aug_strong, label, ulabel = img1.to(device, non_blocking=True), \
+                                                          img2.to(device, non_blocking=True), \
+                                                          aug_weak.to(device, non_blocking=True), \
+                                                          aug_strong.to(device, non_blocking=True), \
+                                                          label.to(device, non_blocking=True), \
+                                                          ulabel.to(device, non_blocking=True)
         data_time = time.time() - data_start_time
 
         # -------------------------------- loss -------------------------------- #
@@ -80,8 +82,9 @@ def train_epoch(
         if it % num_accum == (num_accum - 1):  # update step
             forward_start_time = time.time()
             with amp.autocast(enabled=fp16):
-                _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
-                                  aug_strong=aug_strong, iter=it, max_iter=len(label_dataloader))  # {"loss", "acc1"}
+                _, output = model(img1=img1, label=label, ulabel=ulabel, img2=img2, aug_weak=aug_weak,
+                                  aug_strong=aug_strong, iter=it, max_iter=len(label_dataloader),
+                                  epoch=current_epoch)  # {"loss", "acc1"}
             forward_time = time.time() - forward_start_time
 
             backward_start_time = time.time()
@@ -101,9 +104,9 @@ def train_epoch(
         elif isinstance(model, DistributedDataParallel):  # non-update step and DDP
             with model.no_sync():
                 with amp.autocast(enabled=fp16):
-                    _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
+                    _, output = model(img1=img1, label=label, ulabel=ulabel, img2=img2, aug_weak=aug_weak,
                                       aug_strong=aug_strong,
-                                      iter=it, max_iter=len(label_dataloader))  # {"loss", "acc1"}
+                                      iter=it, max_iter=len(label_dataloader), epoch=current_epoch)  # {"loss", "acc1"}
 
                 loss = output["loss"]
                 loss = loss / num_accum
@@ -111,8 +114,9 @@ def train_epoch(
 
         else:  # non-update step and not DDP
             with amp.autocast(enabled=fp16):
-                _, output = model(img1=img1, label=label, img2=img2, aug_weak=aug_weak,
-                                  aug_strong=aug_strong, iter=it, max_iter=len(label_dataloader))  # {"loss", "acc1"}
+                _, output = model(img1=img1, label=label, ulabel=ulabel, img2=img2, aug_weak=aug_weak,
+                                  aug_strong=aug_strong, iter=it, max_iter=len(label_dataloader),
+                                  epoch=current_epoch)  # {"loss", "acc1"}
 
             loss = output["loss"]
             loss = loss / num_accum
@@ -340,7 +344,7 @@ def run(cfg: Dict, debug: bool = False, eval: bool = False) -> None:
         epoch_start_time = time.time()  # second
         current_iter = train_epoch(model, optimizer, scheduler, scaler, train_label_dataloader,
                                    train_unlabel_dataloader,
-                                   train_cfg, device, current_iter)
+                                   train_cfg, device, current_iter, current_epoch)
         epoch_time = time.time() - epoch_start_time
         if is_master():
             s = time_log()

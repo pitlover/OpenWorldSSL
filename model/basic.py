@@ -21,6 +21,7 @@ class Basic(nn.Module):
         model_name = cfg["backbone"]["name"].lower()
         self.n_mlp_layers = cfg["backbone"]["n_mlp_layers"]
         self.output_dim = num_classes
+        self.mlp_dim = cfg["backbone"]["mlp_dim"]
 
         # ------------------- Model ------------------ #
         if "resnet" in model_name:
@@ -31,7 +32,7 @@ class Basic(nn.Module):
                 self.backbone = freeze_layers(self.backbone, model_name)  # (linear or fc) and layer4
 
         elif "dino" in model_name:
-            self.backbone = DinoFeaturizer(cfg["backbone"])
+            self.backbone = DinoFeaturizer(cfg["backbone"], cfg["backbone"]["is_freeze"])
         else:
             raise ValueError(f"Not supported {model_name} model.")
 
@@ -39,7 +40,8 @@ class Basic(nn.Module):
         self.entropy_loss = Entropy()
 
         # # -------- Head -------- #
-        self.head = DINOHead(in_dim=self.backbone.feat_dim, out_dim=num_classes, nlayers=self.n_mlp_layers)
+        self.head = DINOHead(in_dim=self.backbone.feat_dim, out_dim=self.mlp_dim, nlayers=self.n_mlp_layers)
+        self.classifier = nn.Linear(self.mlp_dim, self.num_classes)
 
     def forward(self,
                 img: torch.Tensor,
@@ -61,8 +63,9 @@ class Basic(nn.Module):
         results = {}
 
         # dino (b, 768) , head (b, hidden_dim, h, w), classifier (b, num_classes)
-        dino_feat, attn, qkv = self.backbone(img)
-        out = self.head(dino_feat)
+        dino_feat, attn = self.backbone(img)
+        head = self.head(dino_feat)
+        out = self.classifier(head)
 
         if not self.training:
             return F.softmax(out, dim=1), None
