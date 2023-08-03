@@ -1,5 +1,5 @@
 project: "OpenWorldSSL"
-name: "Consistency"
+name: "Consistency_100"
 save_dir: "result/${dataset.name}/${name}"
 data_dir: "../Datasets"
 
@@ -25,7 +25,7 @@ resume:
 
 # ---------------------------------------------------------------- #
 model:
-  pretrain_classifier_epoch: 1
+  pretrain_classifier_epoch: 100
   backbone:
     name: "resnet18"                            # "dino", "resnet"
     is_freeze: true

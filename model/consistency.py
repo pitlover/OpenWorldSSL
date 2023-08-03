@@ -103,13 +103,14 @@ class Consistency(nn.Module):
             _, top1_unlabeled_seen_strong = F.softmax(logit_aug_strong[num_label:][ulabel_seen_mask], dim=1).max(1)
             _, top1_unlabeled_unseen_strong = F.softmax(logit_aug_strong[num_label:][ulabel_unseen_mask], dim=1).max(1)
 
-            assert len(top1_unlabeled_seen_strong) == len(ulabel), "Not same size of unlabeled data"
+            results["label_seen"] = torch.sum(
+                (top1_labeled_aug_weak == top1_labeled_aug_strong) & (top1_labeled_aug_strong < self.num_seen)) \
+                                    / len(top1_labeled_aug_weak)
+            results["unlabel_unseen"] = torch.sum(
+                (top1_unlabeled_seen_weak == top1_unlabeled_seen_strong) & (top1_unlabeled_seen_weak < self.num_seen)) \
+                                        / len(top1_unlabeled_unseen_weak)
+            results["unlabel_seen"] = torch.sum(
+                (top1_unlabeled_seen_weak == top1_unlabeled_seen_strong) & (top1_unlabeled_seen_weak < self.num_seen)) \
+                                      / len(top1_unlabeled_seen_weak)
 
-            print("label", torch.sum(top1_labeled_aug_weak == top1_labeled_aug_strong),
-                  len(top1_labeled_aug_weak))
-
-            print("unlabel_unseen", torch.sum(top1_unlabeled_unseen_weak == top1_unlabeled_unseen_strong),
-                  len(top1_unlabeled_unseen_weak))
-            print("unlabel_seen", torch.sum(top1_unlabeled_seen_weak == top1_unlabeled_seen_strong),
-                  len(top1_unlabeled_seen_weak))
         return prob_out, results
